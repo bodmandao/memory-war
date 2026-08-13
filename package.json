@@ -1,0 +1,44 @@
+{
+  "name": "memory-war",
+  "private": true,
+  "version": "0.1.0",
+  "description": "MEMORY WAR — a persistent, adversarially-tested knowledge layer for machine-generated claims, on 0G.",
+  "workspaces": [
+    "packages/*",
+    "contracts",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace=packages/protocol-core --workspace=packages/zg-adapters",
+    "test": "npm run test --workspace=packages/protocol-core --workspace=packages/zg-adapters",
+    "test:contracts": "npm run test --workspace=contracts",
+    "typecheck": "npm run typecheck --workspace=packages/protocol-core --workspace=packages/zg-adapters --workspace=apps/indexer",
+    "demo:tamper": "tsx demo/tamper-demo.ts",
+    "demo:a": "tsx demo/scenario-a.ts",
+    "demo:b": "tsx demo/scenario-b.ts",
+    "demo:full": "tsx demo/run-all.ts",
+    "demo:server": "tsx demo/server.ts",
+    "chain:node": "npm run node --workspace=contracts",
+    "chain:deploy:local": "npm run deploy:local --workspace=contracts",
+    "indexer:dev": "npm run dev --workspace=apps/indexer",
+    "web:dev": "npm run dev --workspace=apps/web"
+  },
+  "dependencies": {
+    "@memory-war/protocol-core": "0.1.0",
+    "@memory-war/zg-adapters": "0.1.0",
+    "ethers": "^6.13.1",
+    "express": "^4.21.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "tsx": "^4.19.2",
+    "@types/node": "^22.10.2",
+    "@types/express": "^4.17.21",
+    "@types/cors": "^2.8.17"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["demo"],
+  "references": [
+    { "path": "packages/protocol-core" },
+    { "path": "packages/zg-adapters" },
+    { "path": "apps/indexer" }
+  ]
+}
