@@ -1,0 +1,25 @@
+{
+  "name": "@memory-war/protocol-core",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Pure domain logic for MEMORY WAR: predicate disambiguation, evidence bundle commitments, justification/supersession DAG, mechanical resolution, bi-temporal claims, and the claim/challenge state machine. No network, no chain, no LLM calls — deterministic and fully tested.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "ethers": "^6.13.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8",
+    "@types/node": "^22.10.2"
+  }
+}
