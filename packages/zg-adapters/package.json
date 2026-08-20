@@ -1,0 +1,24 @@
+{
+  "name": "@memory-war/zg-adapters",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Honest, mode-aware adapters for 0G Storage and 0G Compute. Every capability is labeled 0G_STORAGE_LIVE / 0G_COMPUTE_TEE, LOCAL_LLM, or SIMULATED — never claimed as more than it is (spec §22).",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@memory-war/protocol-core": "0.1.0",
+    "ethers": "^6.13.1",
+    "@0gfoundation/0g-storage-ts-sdk": "^1.2.11",
+    "@0gfoundation/0g-compute-ts-sdk": "^0.9.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8",
+    "@types/node": "^22.10.2"
+  }
+}
