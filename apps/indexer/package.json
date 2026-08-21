@@ -1,0 +1,27 @@
+{
+  "name": "@memory-war/indexer",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Read-only query layer. Rebuilds the full claim graph by replaying on-chain events and hydrating content from 0G Storage. NOT authoritative — every field it serves is independently reconstructible from the chain (spec §5).",
+  "main": "./dist/server.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@memory-war/protocol-core": "0.1.0",
+    "@memory-war/zg-adapters": "0.1.0",
+    "ethers": "^6.13.1",
+    "express": "^4.21.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/cors": "^2.8.17",
+    "typescript": "^5.6.3",
+    "tsx": "^4.19.2"
+  }
+}
