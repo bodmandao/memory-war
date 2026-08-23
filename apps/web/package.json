@@ -1,0 +1,15 @@
+{
+  "name": "@memory-war/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "vite": "^5.4.11",
+    "typescript": "^5.6.3"
+  }
+}
