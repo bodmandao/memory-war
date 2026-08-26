@@ -8,3 +8,4 @@ export * from "./resolution.js";
 export * from "./agent.js";
 export * from "./stateMachine.js";
 export * from "./appeal.js";
+export * from "./payment.js";

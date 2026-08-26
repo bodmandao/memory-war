@@ -1,6 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
+/// @dev Minimal interface — MemoryWarRegistry only ever needs to read the
+/// current controller of a persistent investigator identity; it
+/// deliberately does not import the full InvestigatorRegistry contract.
+interface IInvestigatorRegistry {
+    function controllerOf(bytes32 investigatorId) external view returns (address);
+}
+
 /// @title MemoryWarRegistry
 /// @notice On-chain trust-critical state for the MEMORY WAR protocol.
 ///
@@ -35,12 +42,21 @@ contract MemoryWarRegistry {
 
     enum ChallengeType {
         CONTRADICTION,
-        SOURCE_QUALITY
+        SOURCE_QUALITY,
+        VERIFICATION_REQUEST
     }
     // NB: there is deliberately no PREDICATE_MISMATCH challenge type.
     // Predicate mismatches never reach this contract as a Challenge at
     // all — they are recorded via recordRelationship, permissionlessly,
     // with no bond. See spec §8/§15.
+    //
+    // VERIFICATION_REQUEST is the pay-per-verification path: an agent
+    // pays to have a claim investigated with no adversary and no
+    // dispute — "can I trust this" rather than "I dispute this". It
+    // reuses the exact same evidence/investigation/resolution pipeline
+    // as an adversarial challenge (see requestVerification below) so
+    // nothing about the epistemic machinery changes; only the economics
+    // and the absence of a liveness window do.
 
     enum ChallengeState {
         OPEN,
@@ -128,9 +144,26 @@ contract MemoryWarRegistry {
     // for THIS challenge?
     mapping(bytes32 => mapping(address => bool)) public hasReported;
     mapping(bytes32 => uint256) public reportCount;
+    mapping(bytes32 => address[]) public investigatorsOf; // challengeId => investigator addresses who reported, for fee payout
 
     uint256 public appealCount;
     mapping(uint256 => AppealRecord) public appeals;
+
+    /// @notice Portable investigator identity registry (see
+    /// InvestigatorRegistry.sol) — set once at deployment. Optional: a
+    /// zero address means no identity registry is wired up and only the
+    /// address-based submitReport() path is available.
+    IInvestigatorRegistry public immutable investigatorRegistry;
+
+    /// @dev Share of a case's fee/bond paid to investigators regardless of
+    /// verdict (spec §10: investigator pay is "deliberately not
+    /// outcome-contingent"). A pay-per-verification request has no
+    /// adversary to refund, so its entire fee funds investigator work;
+    /// an adversarial challenge keeps most of its bond in the win/lose
+    /// game and carves out a smaller flat share for the investigators
+    /// who did the work either way.
+    uint256 public constant INVESTIGATOR_FEE_BPS_VERIFICATION = 10_000; // 100%
+    uint256 public constant INVESTIGATOR_FEE_BPS_CHALLENGE = 2_000; // 20%
 
     // ── Events (the reconstructible source of truth) ───────────────────
 
@@ -145,6 +178,8 @@ contract MemoryWarRegistry {
     event Superseded(bytes32 indexed oldClaimId, bytes32 indexed newClaimId, RelationshipType relation, uint64 occurredAt);
     event AppealFiled(uint256 indexed appealId, bytes32 indexed challengeId, address indexed filedBy, string reason, uint64 occurredAt);
     event AppealResolved(uint256 indexed appealId, VerdictStatus newStatus, bytes32 newProcedureHash, bytes32 newReportsRoot, uint64 occurredAt);
+    event InvestigatorPaid(bytes32 indexed challengeId, address indexed investigator, uint256 amount, uint64 occurredAt);
+    event ReportIdentityLinked(bytes32 indexed challengeId, address indexed investigator, bytes32 indexed investigatorId);
 
     // ── Errors ───────────────────────────────────────────────────────
 
@@ -155,6 +190,11 @@ contract MemoryWarRegistry {
     error WindowNotClosed(uint64 closesAt, uint64 nowTs);
     error DuplicateReport(address investigator, bytes32 challengeId);
     error NotContradiction();
+    error NotInvestigatorController(bytes32 investigatorId, address caller);
+
+    constructor(address _investigatorRegistry) {
+        investigatorRegistry = IInvestigatorRegistry(_investigatorRegistry);
+    }
 
     // ── Claims ───────────────────────────────────────────────────────
 
@@ -246,6 +286,37 @@ contract MemoryWarRegistry {
         emit ChallengeOpened(challengeId, claimId, challengeType, msg.sender, msg.value, uint64(block.timestamp), uint64(block.timestamp) + DEFAULT_CHALLENGE_WINDOW);
     }
 
+    /// @notice Priority-1 payment flow (spec: "an agent paying for an
+    /// investigation... pay-per-verification"). No dispute, no adversary,
+    /// no liveness window — an agent pays msg.value as a verification
+    /// fee and the claim goes straight to INVESTIGATING once evidence is
+    /// locked. The fee is not a token: it settles in 0G Chain's native
+    /// currency, the same rail `openChallenge`'s bond already uses.
+    function requestVerification(bytes32 claimId) external payable returns (bytes32 requestId) {
+        ClaimRecord storage claim = claims[claimId];
+        if (!claim.exists) revert ClaimNotFound(claimId);
+        if (claim.status != ClaimStatus.OPEN) revert IllegalTransition("claim", uint8(claim.status), uint8(ClaimStatus.CHALLENGED));
+        require(msg.value > 0, "verification fee required");
+
+        requestId = keccak256(abi.encodePacked(claimId, msg.sender, block.timestamp, "verify"));
+        require(!challenges[requestId].exists, "id collision");
+
+        challenges[requestId] = ChallengeRecord({
+            claimId: claimId,
+            challengeType: ChallengeType.VERIFICATION_REQUEST,
+            challenger: msg.sender, // the paying agent — not an adversary here, just the requester
+            bond: msg.value,
+            openedAt: uint64(block.timestamp),
+            windowCloseAt: uint64(block.timestamp), // no adversarial liveness period needed
+            evidenceRoot: bytes32(0),
+            state: ChallengeState.OPEN,
+            exists: true
+        });
+        claim.status = ClaimStatus.CHALLENGED;
+
+        emit ChallengeOpened(requestId, claimId, ChallengeType.VERIFICATION_REQUEST, msg.sender, msg.value, uint64(block.timestamp), uint64(block.timestamp));
+    }
+
     function beginInvestigation(bytes32 challengeId) external {
         ChallengeRecord storage c = challenges[challengeId];
         if (!c.exists) revert ChallengeNotFound(challengeId);
@@ -267,6 +338,39 @@ contract MemoryWarRegistry {
         AttestationMode attestationMode,
         bool attestationVerified
     ) external {
+        _submitReport(challengeId, evidenceBundleHash, reportCommitment, verdict, attestationMode, attestationVerified);
+    }
+
+    /// @notice Same as submitReport, but additionally links this report to
+    /// a persistent InvestigatorRegistry identity (spec §Priority-2: "an
+    /// investigator's identity should persist independently from any
+    /// individual investigation"). Reverts unless the caller is the
+    /// identity's current controller, so a rotated key can't be used to
+    /// forge history onto an identity it no longer controls.
+    function submitReportAsIdentity(
+        bytes32 challengeId,
+        bytes32 investigatorId,
+        bytes32 evidenceBundleHash,
+        bytes32 reportCommitment,
+        uint8 verdict,
+        AttestationMode attestationMode,
+        bool attestationVerified
+    ) external {
+        if (investigatorRegistry.controllerOf(investigatorId) != msg.sender) {
+            revert NotInvestigatorController(investigatorId, msg.sender);
+        }
+        _submitReport(challengeId, evidenceBundleHash, reportCommitment, verdict, attestationMode, attestationVerified);
+        emit ReportIdentityLinked(challengeId, msg.sender, investigatorId);
+    }
+
+    function _submitReport(
+        bytes32 challengeId,
+        bytes32 evidenceBundleHash,
+        bytes32 reportCommitment,
+        uint8 verdict,
+        AttestationMode attestationMode,
+        bool attestationVerified
+    ) private {
         ChallengeRecord storage c = challenges[challengeId];
         if (!c.exists) revert ChallengeNotFound(challengeId);
         if (c.state != ChallengeState.INVESTIGATING) revert IllegalTransition("challenge", uint8(c.state), uint8(c.state));
@@ -274,6 +378,7 @@ contract MemoryWarRegistry {
 
         hasReported[challengeId][msg.sender] = true;
         reportCount[challengeId] += 1;
+        investigatorsOf[challengeId].push(msg.sender);
 
         emit ReportSubmitted(challengeId, msg.sender, evidenceBundleHash, reportCommitment, verdict, attestationMode, attestationVerified, uint64(block.timestamp));
     }
@@ -311,7 +416,7 @@ contract MemoryWarRegistry {
             exists: true
         });
 
-        _settleBond(c, status);
+        _settleBond(challengeId, c, status);
 
         emit Resolved(challengeId, c.claimId, status, procedureHash, reportsRoot, dissentRoot, uint64(block.timestamp));
     }
@@ -324,23 +429,62 @@ contract MemoryWarRegistry {
         return ClaimStatus.INCONCLUSIVE;
     }
 
-    /// @dev Bond settlement rule (spec §10, kill-test §9/§10): a challenge
-    /// that turns out to be CLEARLY WRONG (claim resolves TRUE) forfeits
-    /// its bond. A challenge that surfaces a genuine problem (FALSE) gets
-    /// its bond back plus the disputed claim is marked FALSE. Ambiguous
-    /// outcomes (CONTESTED / INCONCLUSIVE) return the bond in full — a
-    /// good-faith challenge that surfaced real uncertainty is never
-    /// penalized as if it had been frivolous.
-    function _settleBond(ChallengeRecord storage c, VerdictStatus status) private {
+    /// @dev Bond/fee settlement (spec §10, kill-test §9/§10, and the
+    /// Priority-1 payment pass). Two things happen, in order:
+    ///
+    /// 1. Investigators who actually submitted a report get paid their
+    ///    execution fee OUT OF THE POOL FIRST, split evenly, REGARDLESS
+    ///    of which way the verdict went — spec §10: investigator pay is
+    ///    "deliberately not outcome-contingent". A VERIFICATION_REQUEST
+    ///    has no adversary, so its whole fee funds this; an adversarial
+    ///    CONTRADICTION/SOURCE_QUALITY challenge carves out a smaller
+    ///    fixed share and leaves the rest in the win/lose game below.
+    /// 2. Whatever remains follows the original dispute-outcome rule: a
+    ///    challenge that turns out CLEARLY WRONG (claim resolves TRUE)
+    ///    forfeits its remainder to the contract; one that surfaces a
+    ///    genuine problem (FALSE) gets its remainder back; ambiguous
+    ///    outcomes (CONTESTED/INCONCLUSIVE) return the remainder in full.
+    ///
+    /// If no investigator ever reported, the whole pool simply falls
+    /// through to step 2 unchanged — this is what keeps every existing
+    /// bond-refund/forfeit test passing unmodified.
+    function _settleBond(bytes32 challengeId, ChallengeRecord storage c, VerdictStatus status) private {
         if (c.bond == 0) return;
-        uint256 amount = c.bond;
+        uint256 totalPool = c.bond;
         c.bond = 0;
-        if (status == VerdictStatus.TRUE_) {
-            // challenger was wrong — bond is forfeit to the protocol treasury (this contract), not refunded
-            return;
+
+        address[] memory reporters = investigatorsOf[challengeId];
+        uint256 feeBps = c.challengeType == ChallengeType.VERIFICATION_REQUEST
+            ? INVESTIGATOR_FEE_BPS_VERIFICATION
+            : INVESTIGATOR_FEE_BPS_CHALLENGE;
+        uint256 investigatorPool = (totalPool * feeBps) / 10_000;
+        uint256 remainder = totalPool - investigatorPool;
+
+        if (reporters.length > 0 && investigatorPool > 0) {
+            uint256 share = investigatorPool / reporters.length;
+            uint256 dust = investigatorPool - (share * reporters.length); // integer-division remainder, folded into the pool below
+            remainder += dust;
+            for (uint256 i = 0; i < reporters.length; i++) {
+                // best-effort: one investigator's transfer failing must
+                // never block paying the others or block settlement.
+                (bool sent, ) = payable(reporters[i]).call{value: share}("");
+                if (sent) emit InvestigatorPaid(challengeId, reporters[i], share, uint64(block.timestamp));
+                else remainder += share;
+            }
+        } else {
+            remainder += investigatorPool; // nobody reported — nothing to pay, fold back into the pool
         }
-        (bool sent, ) = payable(c.challenger).call{value: amount}("");
-        require(sent, "bond refund failed");
+
+        if (c.challengeType == ChallengeType.VERIFICATION_REQUEST) {
+            return; // no adversary to refund; any un-paid remainder (e.g. failed transfers) simply stays in the contract
+        }
+        if (status == VerdictStatus.TRUE_) {
+            return; // challenger was wrong — remainder forfeit to the protocol treasury (this contract)
+        }
+        if (remainder > 0) {
+            (bool sent, ) = payable(c.challenger).call{value: remainder}("");
+            require(sent, "bond refund failed");
+        }
     }
 
     // ── Appeals (append-only) ───────────────────────────────────────
