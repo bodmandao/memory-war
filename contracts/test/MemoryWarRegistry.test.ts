@@ -2,17 +2,21 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { time } from "@nomicfoundation/hardhat-network-helpers";
 import { anyValue } from "@nomicfoundation/hardhat-chai-matchers/withArgs";
-import type { MemoryWarRegistry } from "../typechain-types";
+import type { MemoryWarRegistry, InvestigatorRegistry } from "../typechain-types";
 
 const h = (s: string) => ("0x" + Buffer.from(s.padEnd(32, "\0")).toString("hex")) as `0x${string}`;
 
 describe("MemoryWarRegistry", () => {
   async function deploy() {
     const [author, challenger, investigatorA, investigatorB] = await ethers.getSigners();
+    const RegistryFactory = await ethers.getContractFactory("InvestigatorRegistry");
+    const investigatorRegistry = (await RegistryFactory.deploy()) as unknown as InvestigatorRegistry;
+    await investigatorRegistry.waitForDeployment();
+
     const Factory = await ethers.getContractFactory("MemoryWarRegistry");
-    const registry = (await Factory.deploy()) as unknown as MemoryWarRegistry;
+    const registry = (await Factory.deploy(await investigatorRegistry.getAddress())) as unknown as MemoryWarRegistry;
     await registry.waitForDeployment();
-    return { registry, author, challenger, investigatorA, investigatorB };
+    return { registry, investigatorRegistry, author, challenger, investigatorA, investigatorB };
   }
 
   it("creates a claim and emits ClaimCreated with a deterministic id given the same inputs at the same block", async () => {
@@ -164,6 +168,152 @@ describe("MemoryWarRegistry", () => {
     const originalAfter = await registry.verdicts(challengeId);
     expect(originalAfter.status).to.equal(originalBefore.status); // untouched — still TRUE_
     expect(originalAfter.procedureHash).to.equal(originalBefore.procedureHash);
+  });
+
+  // ── Priority-1: pay-per-verification ──────────────────────────────
+
+  describe("requestVerification (pay-per-verification, no adversary)", () => {
+    it("opens a VERIFICATION_REQUEST with no liveness window and pays 100% of the fee to investigators who reported", async () => {
+      const { registry, author, investigatorA, investigatorB } = await deploy();
+      const claimId = await createClaim(registry, author, "verify-me");
+
+      const fee = ethers.parseEther("1");
+      const tx = await registry.connect(author).requestVerification(claimId, { value: fee });
+      const receipt = await tx.wait();
+      const opened = receipt!.logs.map((l) => registry.interface.parseLog(l)).find((e) => e?.name === "ChallengeOpened")!;
+      const requestId = opened.args.challengeId as string;
+      expect(opened.args.challengeType).to.equal(2n); // VERIFICATION_REQUEST
+
+      await registry.lockEvidence(requestId, h("verify-root"));
+      await registry.beginInvestigation(requestId);
+
+      // no window to wait out — resolve is immediately callable
+      await registry.connect(investigatorA).submitReport(requestId, h("bundle"), h("report-a"), 1, 0, true);
+      await registry.connect(investigatorB).submitReport(requestId, h("bundle"), h("report-b"), 1, 0, true);
+
+      const balABefore = await ethers.provider.getBalance(await investigatorA.getAddress());
+      const balBBefore = await ethers.provider.getBalance(await investigatorB.getAddress());
+
+      await expect(registry.resolve(requestId, 1 /* TRUE_ */, h("proc"), h("reports"), h("dissent")))
+        .to.emit(registry, "InvestigatorPaid")
+        .withArgs(requestId, await investigatorA.getAddress(), fee / 2n, anyValue);
+
+      const balAAfter = await ethers.provider.getBalance(await investigatorA.getAddress());
+      const balBAfter = await ethers.provider.getBalance(await investigatorB.getAddress());
+      expect(balAAfter - balABefore).to.equal(fee / 2n);
+      expect(balBAfter - balBBefore).to.equal(fee / 2n);
+
+      const contractBalAfter = await ethers.provider.getBalance(await registry.getAddress());
+      expect(contractBalAfter).to.equal(0n); // the whole fee was distributed — nothing withheld for a nonexistent adversary
+    });
+  });
+
+  describe("investigator fee on adversarial challenges", () => {
+    it("pays investigators their 20% share regardless of verdict, then applies the existing win/lose rule to the remainder", async () => {
+      const { registry, author, challenger, investigatorA, investigatorB } = await deploy();
+      const claimId = await createClaim(registry, author, "adversarial");
+      const bond = ethers.parseEther("1");
+      const challengeId = await openChallenge(registry, challenger, claimId, bond);
+      await registry.lockEvidence(challengeId, h("root"));
+      await registry.beginInvestigation(challengeId);
+      await registry.connect(investigatorA).submitReport(challengeId, h("bundle"), h("report-a"), 1, 0, true);
+      await registry.connect(investigatorB).submitReport(challengeId, h("bundle"), h("report-b"), 1, 0, true);
+      await time.increase(2 * 60 + 1);
+
+      const challengerBalBefore = await ethers.provider.getBalance(await challenger.getAddress());
+      const investigatorABalBefore = await ethers.provider.getBalance(await investigatorA.getAddress());
+
+      // FALSE_: challenger was right — gets the 80% remainder back, on top of investigators taking their 20%
+      await registry.resolve(challengeId, 2 /* FALSE_ */, h("proc"), h("reports"), h("dissent"));
+
+      const expectedInvestigatorShare = (bond * 2_000n) / 10_000n / 2n; // 20% split two ways
+      const expectedRemainder = bond - expectedInvestigatorShare * 2n;
+
+      const investigatorABalAfter = await ethers.provider.getBalance(await investigatorA.getAddress());
+      expect(investigatorABalAfter - investigatorABalBefore).to.equal(expectedInvestigatorShare);
+
+      const challengerBalAfter = await ethers.provider.getBalance(await challenger.getAddress());
+      expect(challengerBalAfter - challengerBalBefore).to.equal(expectedRemainder);
+    });
+  });
+
+  // ── Priority-2: portable investigator identity ────────────────────
+
+  describe("submitReportAsIdentity + InvestigatorRegistry", () => {
+    it("registers a persistent identity and links a report to it", async () => {
+      const { registry, investigatorRegistry, author, challenger, investigatorA } = await deploy();
+      const claimId = await createClaim(registry, author, "identity");
+      const challengeId = await openChallenge(registry, challenger, claimId);
+      await registry.lockEvidence(challengeId, h("root"));
+      await registry.beginInvestigation(challengeId);
+
+      // h("no-parent") is nonzero and unregistered — a genuinely absent parent must be bytes32(0), not just "some other id"
+      await expect(investigatorRegistry.connect(investigatorA).register("anthropic:claude-haiku-4-5", h("no-parent"))).to.be.reverted;
+
+      const realRegTx = await investigatorRegistry.connect(investigatorA).register("anthropic:claude-haiku-4-5", ethers.ZeroHash);
+      const regReceipt = await realRegTx.wait();
+      const registered = regReceipt!.logs
+        .map((l) => investigatorRegistry.interface.parseLog(l))
+        .find((e) => e?.name === "InvestigatorRegistered")!;
+      const investigatorId = registered.args.investigatorId as string;
+      expect(await investigatorRegistry.controllerOf(investigatorId)).to.equal(await investigatorA.getAddress());
+      // regression: InvestigatorRegistered/ControllerRotated once used `uint64 at` as an
+      // event param name, which ethers.js's Array-derived Result silently resolves to
+      // Array.prototype.at instead of the field — see docs/AUDIT.md. Assert it's a real number.
+      expect(registered.args.occurredAt).to.be.greaterThan(0n);
+      const stored = await investigatorRegistry.investigators(investigatorId);
+      expect(stored.registeredAt).to.be.greaterThan(0n);
+
+      await expect(registry.connect(investigatorA).submitReportAsIdentity(challengeId, investigatorId, h("bundle"), h("report"), 1, 0, true))
+        .to.emit(registry, "ReportIdentityLinked")
+        .withArgs(challengeId, await investigatorA.getAddress(), investigatorId);
+    });
+
+    it("rejects submitReportAsIdentity from an address that does not control the identity", async () => {
+      const { registry, investigatorRegistry, author, challenger, investigatorA, investigatorB } = await deploy();
+      const claimId = await createClaim(registry, author, "identity-2");
+      const challengeId = await openChallenge(registry, challenger, claimId);
+      await registry.lockEvidence(challengeId, h("root"));
+      await registry.beginInvestigation(challengeId);
+
+      const regTx = await investigatorRegistry.connect(investigatorA).register("anthropic:claude-haiku-4-5", ethers.ZeroHash);
+      const regReceipt = await regTx.wait();
+      const investigatorId = regReceipt!.logs
+        .map((l) => investigatorRegistry.interface.parseLog(l))
+        .find((e) => e?.name === "InvestigatorRegistered")!.args.investigatorId as string;
+
+      await expect(
+        registry.connect(investigatorB).submitReportAsIdentity(challengeId, investigatorId, h("bundle"), h("report"), 1, 0, true),
+      ).to.be.revertedWithCustomError(registry, "NotInvestigatorController");
+    });
+
+    it("lets an identity's controller rotate to a new key without losing the identity", async () => {
+      const { investigatorRegistry, investigatorA, investigatorB } = await deploy();
+      const regTx = await investigatorRegistry.connect(investigatorA).register("anthropic:claude-haiku-4-5", ethers.ZeroHash);
+      const regReceipt = await regTx.wait();
+      const investigatorId = regReceipt!.logs
+        .map((l) => investigatorRegistry.interface.parseLog(l))
+        .find((e) => e?.name === "InvestigatorRegistered")!.args.investigatorId as string;
+
+      await investigatorRegistry.connect(investigatorA).rotateController(investigatorId, await investigatorB.getAddress());
+      expect(await investigatorRegistry.controllerOf(investigatorId)).to.equal(await investigatorB.getAddress());
+
+      await expect(
+        investigatorRegistry.connect(investigatorA).rotateController(investigatorId, await investigatorA.getAddress()),
+      ).to.be.revertedWithCustomError(investigatorRegistry, "NotController"); // the OLD controller lost control after rotating away
+    });
+
+    it("records explicit version lineage via parentId", async () => {
+      const { investigatorRegistry, investigatorA } = await deploy();
+      const v1Tx = await investigatorRegistry.connect(investigatorA).register("anthropic:claude-haiku-4-5", ethers.ZeroHash);
+      const v1Receipt = await v1Tx.wait();
+      const v1Id = v1Receipt!.logs.map((l) => investigatorRegistry.interface.parseLog(l)).find((e) => e?.name === "InvestigatorRegistered")!
+        .args.investigatorId as string;
+
+      await expect(investigatorRegistry.connect(investigatorA).register("anthropic:claude-sonnet-5", v1Id))
+        .to.emit(investigatorRegistry, "InvestigatorRegistered")
+        .withArgs(anyValue, await investigatorA.getAddress(), "anthropic:claude-sonnet-5", v1Id, anyValue);
+    });
   });
 
   // ── helpers ────────────────────────────────────────────────────────
