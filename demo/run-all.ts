@@ -1,11 +1,12 @@
 import "dotenv/config";
-import { runScenarioA, runScenarioB, runTamperDemo } from "./lib.js";
+import { runScenarioA, runScenarioB, runScenarioC, runTamperDemo } from "./lib.js";
 import { printTrace } from "./print.js";
 
 async function main() {
   printTrace(await runTamperDemo());
   printTrace(await runScenarioA());
   printTrace(await runScenarioB());
+  printTrace(await runScenarioC());
 }
 
 main().catch((err) => {

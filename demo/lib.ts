@@ -212,6 +212,255 @@ export async function runScenarioB(): Promise<DemoTrace> {
   return { scenario: "B: genuine contradiction (full adversarial lifecycle)", steps, ok: true };
 }
 
+/**
+ * Scenario C — Priority 1 + Priority 2 combined: an agent PAYS to have a
+ * claim verified (no adversary, no dispute — spec: "an agent paying for
+ * an investigation"), and the investigators that get paid are portable,
+ * registered identities (spec Priority 2), not bare addresses.
+ */
+export async function runScenarioC(): Promise<DemoTrace> {
+  const steps: DemoStep[] = [];
+  const storage = new ZgStorageAdapter();
+
+  const claimText = "Protocol X has $100M in total value locked";
+  const evidenceText = "On-chain treasury snapshot: $100,000,000 across all vaults as of this block.";
+
+  const agentChain = await makeChain("challenger"); // the "requesting agent" role reuses this funded local key
+  const authorChain = await makeChain("author");
+
+  if (!agentChain.investigatorRegistry) {
+    steps.push({
+      label: "InvestigatorRegistry not configured",
+      detail: "set INVESTIGATOR_REGISTRY_ADDRESS in .env (printed by chain:deploy:local) to run the portable-identity path",
+    });
+    return { scenario: "C: pay-per-verification + portable investigator identity", steps, ok: false };
+  }
+
+  const pred = extractRuleBased(claimText);
+  const claimUp = await storage.upload(textToBytes(claimText));
+  const claimId = await createClaimOnChain(authorChain, hashUtf8(JSON.stringify(pred)), claimUp.rootHash, pred);
+  steps.push({ label: "Claim created", detail: `"${claimText}" -> ${claimId}` });
+
+  const fee = 2_000_000_000_000_000n; // 0.002 native token — the verification fee, paid entirely to investigators (spec Priority 1)
+  const reqTx = await agentChain.contract.requestVerification(claimId, { value: fee });
+  const reqReceipt = await reqTx.wait();
+  const opened = reqReceipt.logs.map((l: any) => agentChain.contract.interface.parseLog(l)).find((e: any) => e?.name === "ChallengeOpened");
+  const requestId = opened.args.challengeId as string;
+  steps.push({
+    label: "Agent pays a verification fee — no adversary, no bond game, just a request",
+    detail: `requestId=${requestId} fee=${fee} wei (0G Chain native settlement — see docs/AUDIT.md on why there is no separate "0G Pay" SDK to call here)`,
+  });
+
+  const investigatorAChain = await makeChain("investigatorA");
+  const investigatorBChain = await makeChain("investigatorB");
+
+  const idA = await registerInvestigatorIdentity(investigatorAChain, "anthropic:claude-haiku-4-5");
+  const idB = await registerInvestigatorIdentity(investigatorBChain, "openai:gpt-4o-mini");
+  steps.push({
+    label: "Investigators registered as portable identities (InvestigatorRegistry, not ERC-7857 — see docs/ERC7857_DECISION.md)",
+    detail: `idA=${idA} idB=${idB} — these ids persist independently of this or any other single investigation`,
+  });
+
+  const ev = makeEvidence({ bytes: textToBytes(evidenceText), sourceType: "ONCHAIN_STATE", submittedBy: await authorChain.signer.getAddress() as `0x${string}`, submittedAt: nowSec() });
+  await storage.upload(textToBytes(evidenceText));
+  await (await authorChain.contract.submitEvidence(requestId, ev.id)).wait();
+  const bundle = lockBundle(buildBundle(requestId as Hash, [ev.id]), nowSec());
+  await (await authorChain.contract.lockEvidence(requestId, bundle.root)).wait();
+  await (await authorChain.contract.beginInvestigation(requestId)).wait();
+  steps.push({ label: "Evidence locked, investigation started", detail: `evidenceRoot=${bundle.root}` });
+
+  const investigatorA = new ZgComputeInvestigator("provider-alpha");
+  const investigatorB = new ZgComputeInvestigator("provider-beta");
+  const reportA = await investigatorA.investigate({
+    claimId: claimId as Hash,
+    challengeId: requestId as Hash,
+    claimText,
+    evidenceTexts: [evidenceText],
+    evidenceBundleHash: bundle.root,
+    investigatorId: (await investigatorAChain.signer.getAddress()) as `0x${string}`,
+  });
+  const reportB = await investigatorB.investigate({
+    claimId: claimId as Hash,
+    challengeId: requestId as Hash,
+    claimText,
+    evidenceTexts: [evidenceText],
+    evidenceBundleHash: bundle.root,
+    investigatorId: (await investigatorBChain.signer.getAddress()) as `0x${string}`,
+  });
+
+  await submitReportAsIdentityOnChain(investigatorAChain, requestId, idA, bundle.root, reportA);
+  await submitReportAsIdentityOnChain(investigatorBChain, requestId, idB, bundle.root, reportB);
+  steps.push({
+    label: "Independent investigators execute, reports linked to their persistent identities",
+    detail: `A: ${reportA.verdict} (${reportA.attestation.mode}) | B: ${reportB.verdict} (${reportB.attestation.mode})`,
+    data: { reportA, reportB },
+  });
+
+  const procedure = new DefaultResolutionProcedure();
+  const verdict = buildVerdict({
+    claimId: claimId as Hash,
+    challengeId: requestId as Hash,
+    procedure,
+    reports: [reportA, reportB],
+    resolvedAt: nowSec(),
+    validFrom: nowSec(),
+  });
+
+  const balABefore = await agentChain.provider.getBalance(await investigatorAChain.signer.getAddress());
+  const balBBefore = await agentChain.provider.getBalance(await investigatorBChain.signer.getAddress());
+
+  const statusIndex = verdictStatusIndex(verdict.status);
+  const resolveTx = await authorChain.contract.resolve(requestId, statusIndex, verdict.procedureHash, verdict.reportsRoot, hashUtf8(JSON.stringify(verdict.dissent)));
+  const resolveReceipt = await resolveTx.wait();
+  const payouts = resolveReceipt.logs
+    .map((l: any) => authorChain.contract.interface.parseLog(l))
+    .filter((e: any) => e?.name === "InvestigatorPaid")
+    .map((e: any) => ({ investigator: e.args.investigator, amount: e.args.amount.toString() }));
+
+  const balAAfter = await agentChain.provider.getBalance(await investigatorAChain.signer.getAddress());
+  const balBAfter = await agentChain.provider.getBalance(await investigatorBChain.signer.getAddress());
+
+  steps.push({
+    label: "Verdict committed AND investigators paid, in the same transaction",
+    detail: `${verdict.status} — investigatorA received ${(balAAfter - balABefore).toString()} wei, investigatorB received ${(balBAfter - balBBefore).toString()} wei`,
+    data: { verdict: verdict.status, rationale: verdict.rationale, payouts, feePaid: fee.toString() },
+  });
+
+  steps.push({
+    label: "History remains permanently queryable by either persistent identity",
+    detail: `GET /investigators/${idA} and /investigators/${idB} now show this investigation in their calibration history`,
+  });
+
+  return { scenario: "C: pay-per-verification + portable investigator identity", steps, ok: true };
+}
+
+/**
+ * The agent-facing entry point (spec Priority 4 / §3): what an
+ * autonomous agent actually calls. Runs the identical pipeline above
+ * against caller-supplied claim/evidence text instead of the fixed
+ * demo fixture, and returns the structured, independently-auditable
+ * result shape the spec asks for. Used by demo/server.ts's
+ * POST /agent/verify-claim — the same code path, not a separate mock.
+ */
+export interface AgentVerifyInput {
+  claim: string;
+  evidence: string[];
+  counterClaim?: string;
+}
+
+export interface AgentVerifyResult {
+  verdict: string;
+  confidence: number | null;
+  evidenceRoot: string;
+  investigationId: string;
+  investigators: Array<{ address: string; investigatorId: string; modelProvider: string; verdict: string; attestation: unknown }>;
+  attestation: { anyLiveTee: boolean; modes: string[] };
+  payment: { feeWei: string; payouts: Array<{ investigator: string; amountWei: string }> };
+  history: { claimId: string; onChainTxHash: string; queryUrl: string };
+}
+
+export async function agentVerifyClaim(input: AgentVerifyInput): Promise<AgentVerifyResult> {
+  const storage = new ZgStorageAdapter();
+  const agentChain = await makeChain("challenger");
+  const authorChain = await makeChain("author");
+  if (!agentChain.investigatorRegistry) throw new Error("INVESTIGATOR_REGISTRY_ADDRESS not configured");
+
+  const pred = extractRuleBased(input.claim);
+  const claimUp = await storage.upload(textToBytes(input.claim));
+  const claimId = await createClaimOnChain(authorChain, hashUtf8(JSON.stringify(pred)), claimUp.rootHash, pred);
+
+  const fee = 2_000_000_000_000_000n;
+  const reqTx = await agentChain.contract.requestVerification(claimId, { value: fee });
+  const reqReceipt = await reqTx.wait();
+  const requestId = reqReceipt.logs.map((l: any) => agentChain.contract.interface.parseLog(l)).find((e: any) => e?.name === "ChallengeOpened")!.args
+    .challengeId as string;
+
+  const investigatorAChain = await makeChain("investigatorA");
+  const investigatorBChain = await makeChain("investigatorB");
+  const idA = await registerInvestigatorIdentity(investigatorAChain, "anthropic:claude-haiku-4-5");
+  const idB = await registerInvestigatorIdentity(investigatorBChain, "openai:gpt-4o-mini");
+
+  const evidenceIds: Hash[] = [];
+  for (const text of input.evidence) {
+    const ev = makeEvidence({ bytes: textToBytes(text), sourceType: "OTHER", submittedBy: await authorChain.signer.getAddress() as `0x${string}`, submittedAt: nowSec() });
+    await storage.upload(textToBytes(text));
+    await (await authorChain.contract.submitEvidence(requestId, ev.id)).wait();
+    evidenceIds.push(ev.id);
+  }
+  const bundle = lockBundle(buildBundle(requestId as Hash, evidenceIds), nowSec());
+  await (await authorChain.contract.lockEvidence(requestId, bundle.root)).wait();
+  await (await authorChain.contract.beginInvestigation(requestId)).wait();
+
+  const investigatorA = new ZgComputeInvestigator("provider-alpha");
+  const investigatorB = new ZgComputeInvestigator("provider-beta");
+  const reportA = await investigatorA.investigate({
+    claimId: claimId as Hash,
+    challengeId: requestId as Hash,
+    claimText: input.claim,
+    counterClaimText: input.counterClaim,
+    evidenceTexts: input.evidence,
+    evidenceBundleHash: bundle.root,
+    investigatorId: (await investigatorAChain.signer.getAddress()) as `0x${string}`,
+  });
+  const reportB = await investigatorB.investigate({
+    claimId: claimId as Hash,
+    challengeId: requestId as Hash,
+    claimText: input.claim,
+    counterClaimText: input.counterClaim,
+    evidenceTexts: input.evidence,
+    evidenceBundleHash: bundle.root,
+    investigatorId: (await investigatorBChain.signer.getAddress()) as `0x${string}`,
+  });
+  await submitReportAsIdentityOnChain(investigatorAChain, requestId, idA, bundle.root, reportA);
+  await submitReportAsIdentityOnChain(investigatorBChain, requestId, idB, bundle.root, reportB);
+
+  const procedure = new DefaultResolutionProcedure();
+  const verdict = buildVerdict({ claimId: claimId as Hash, challengeId: requestId as Hash, procedure, reports: [reportA, reportB], resolvedAt: nowSec(), validFrom: nowSec() });
+
+  const statusIndex = verdictStatusIndex(verdict.status);
+  const resolveTx = await authorChain.contract.resolve(requestId, statusIndex, verdict.procedureHash, verdict.reportsRoot, hashUtf8(JSON.stringify(verdict.dissent)));
+  const resolveReceipt = await resolveTx.wait();
+  const payouts = resolveReceipt.logs
+    .map((l: any) => authorChain.contract.interface.parseLog(l))
+    .filter((e: any) => e?.name === "InvestigatorPaid")
+    .map((e: any) => ({ investigator: e.args.investigator as string, amountWei: e.args.amount.toString() }));
+
+  const avgConfidence = ([reportA, reportB].reduce((s, r) => s + r.confidence, 0)) / 2;
+
+  return {
+    verdict: verdict.status,
+    confidence: verdict.status === "CONTESTED" || verdict.status === "INCONCLUSIVE" ? null : avgConfidence,
+    evidenceRoot: bundle.root,
+    investigationId: requestId,
+    investigators: [
+      { address: await investigatorAChain.signer.getAddress(), investigatorId: idA, modelProvider: "provider-alpha", verdict: reportA.verdict, attestation: reportA.attestation },
+      { address: await investigatorBChain.signer.getAddress(), investigatorId: idB, modelProvider: "provider-beta", verdict: reportB.verdict, attestation: reportB.attestation },
+    ],
+    attestation: {
+      anyLiveTee: [reportA, reportB].some((r) => r.attestation.mode === "0G_COMPUTE_TEE" && r.attestation.verified),
+      modes: [reportA.attestation.mode, reportB.attestation.mode],
+    },
+    payment: { feeWei: fee.toString(), payouts },
+    history: { claimId, onChainTxHash: resolveTx.hash, queryUrl: `/claims/${claimId}` },
+  };
+}
+
+async function registerInvestigatorIdentity(chain: ZgChainAdapter, modelProvider: string): Promise<string> {
+  if (!chain.investigatorRegistry) throw new Error("investigatorRegistry not configured on this chain adapter");
+  const tx = await chain.investigatorRegistry.register(modelProvider, "0x" + "0".repeat(64));
+  const receipt = await tx.wait();
+  const event = receipt.logs.map((l: any) => chain.investigatorRegistry!.interface.parseLog(l)).find((e: any) => e?.name === "InvestigatorRegistered");
+  return event.args.investigatorId as string;
+}
+
+async function submitReportAsIdentityOnChain(chain: ZgChainAdapter, challengeId: string, investigatorId: string, evidenceBundleHash: Hash, report: Report) {
+  const verdictIndex = report.verdict === "SUPPORTS" ? 1 : report.verdict === "REJECTS" ? 2 : 0;
+  const attestationModeIndex = report.attestation.mode === "0G_COMPUTE_TEE" ? 0 : report.attestation.mode === "LOCAL_LLM" ? 1 : 2;
+  const commitment = hashUtf8(JSON.stringify({ ...report, investigatorId: undefined }));
+  const tx = await chain.contract.submitReportAsIdentity(challengeId, investigatorId, evidenceBundleHash, commitment, verdictIndex, attestationModeIndex, report.attestation.verified);
+  await tx.wait();
+}
+
 export async function runTamperDemo(): Promise<DemoTrace> {
   const steps: DemoStep[] = [];
   const storage = new ZgStorageAdapter();
