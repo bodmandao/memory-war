@@ -9,3 +9,4 @@ export * from "./agent.js";
 export * from "./stateMachine.js";
 export * from "./appeal.js";
 export * from "./payment.js";
+export * from "./daBatch.js";
