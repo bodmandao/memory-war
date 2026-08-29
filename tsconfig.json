@@ -1,12 +1,14 @@
 {
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "noEmit": true
+    "noEmit": true,
+    // demo/ scripts call ethers.Contract's dynamically-typed methods
+    // directly (no typechain-generated typed contract here, by design —
+    // see chain.ts's own comment on why the ABI is hand-written). Under
+    // noUncheckedIndexedAccess that surfaces every contract method call
+    // as "possibly undefined", which is noise, not a real safety net,
+    // for this loosely-typed integration-glue code specifically.
+    "noUncheckedIndexedAccess": false
   },
-  "include": ["demo"],
-  "references": [
-    { "path": "packages/protocol-core" },
-    { "path": "packages/zg-adapters" },
-    { "path": "apps/indexer" }
-  ]
+  "include": ["demo"]
 }
