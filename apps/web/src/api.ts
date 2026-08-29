@@ -20,7 +20,10 @@ export const api = {
   challenge: (id: string) => getJson<any>(`${INDEXER_BASE}/challenges/${id}`),
   content: (hash: string) => getJson<any>(`${INDEXER_BASE}/content/${hash}`),
   rebuild: () => postJson<any>(`${INDEXER_BASE}/rebuild`),
+  investigators: () => getJson<{ investigators: any[] }>(`${INDEXER_BASE}/investigators`),
+  investigator: (id: string) => getJson<any>(`${INDEXER_BASE}/investigators/${id}`),
   runTamper: () => postJson<any>(`${DEMO_BASE}/run/tamper`),
   runScenarioA: () => postJson<any>(`${DEMO_BASE}/run/a`),
   runScenarioB: () => postJson<any>(`${DEMO_BASE}/run/b`),
+  runScenarioC: () => postJson<any>(`${DEMO_BASE}/run/c`),
 };

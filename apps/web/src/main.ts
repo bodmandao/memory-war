@@ -6,6 +6,7 @@ const app = document.getElementById("app")!;
 let selectedClaimId: string | null = null;
 let lastTrace: any = null;
 let health: any = null;
+let showInvestigators = false;
 
 async function refreshHealth() {
   try {
@@ -45,10 +46,14 @@ async function render() {
         <div class="btn-row" style="flex-direction:column">
           <button class="btn" id="btn-tamper">Tamper detection</button>
           <button class="btn" id="btn-a">Scenario A — predicate mismatch</button>
-          <button class="btn primary" id="btn-b">Scenario B — genuine contradiction</button>
+          <button class="btn" id="btn-b">Scenario B — genuine contradiction</button>
+          <button class="btn primary" id="btn-c">Scenario C — pay-per-verification</button>
         </div>
         <h2 style="margin-top:24px">Claims</h2>
         <div id="claim-list"></div>
+        <h2 style="margin-top:24px">
+          <a href="#" id="link-investigators" style="color:inherit; text-decoration:none;">Investigators →</a>
+        </h2>
       </aside>
       <main class="content" id="content"></main>
     </div>
@@ -57,6 +62,14 @@ async function render() {
   document.getElementById("btn-tamper")!.addEventListener("click", () => runDemo("tamper"));
   document.getElementById("btn-a")!.addEventListener("click", () => runDemo("a"));
   document.getElementById("btn-b")!.addEventListener("click", () => runDemo("b"));
+  document.getElementById("btn-c")!.addEventListener("click", () => runDemo("c"));
+  document.getElementById("link-investigators")!.addEventListener("click", (e) => {
+    e.preventDefault();
+    showInvestigators = true;
+    lastTrace = null;
+    selectedClaimId = null;
+    renderContent();
+  });
 
   await renderClaimList();
   await renderContent();
@@ -83,6 +96,7 @@ async function renderClaimList() {
       el.addEventListener("click", () => {
         selectedClaimId = el.dataset.id!;
         lastTrace = null;
+        showInvestigators = false;
         renderContent();
       });
     });
@@ -94,6 +108,7 @@ async function renderClaimList() {
 async function renderContent() {
   const content = document.getElementById("content")!;
   if (lastTrace) return renderTrace(content, lastTrace);
+  if (showInvestigators) return renderInvestigators(content);
   if (!selectedClaimId) {
     content.innerHTML = `
       <div class="warn-box">
@@ -114,6 +129,41 @@ async function renderContent() {
     renderClaimDetail(content, claim, challenges);
   } catch (err) {
     content.innerHTML = `<div class="empty">Could not load claim: ${escapeHtml(String(err))}</div>`;
+  }
+}
+
+async function renderInvestigators(content: HTMLElement) {
+  content.innerHTML = `<div class="loading">Loading investigator identities…</div>`;
+  try {
+    const { investigators } = await api.investigators();
+    if (investigators.length === 0) {
+      content.innerHTML = `<div class="empty">No investigator identities registered yet. Run Scenario C to register two.</div>`;
+      return;
+    }
+    content.innerHTML = `
+      <div class="warn-box">
+        <strong>Portable investigator identity</strong> (contracts/InvestigatorRegistry.sol) — not an ERC-7857 Agentic ID,
+        deliberately: see docs/ERC7857_DECISION.md. An identity survives key rotation and accumulates a public
+        calibration history across every investigation it's linked to, independent of any single case.
+      </div>
+      ${investigators
+        .map(
+          (inv: any) => `
+        <div class="card">
+          <h3>${escapeHtml(inv.modelProvider)}</h3>
+          <div class="kv">
+            <div class="k">investigatorId</div><div class="v hash">${inv.id}</div>
+            <div class="k">controller</div><div class="v hash">${inv.controller}</div>
+            <div class="k">registered</div><div class="v">${fmtTime(inv.registeredAt)}</div>
+            <div class="k">lineage</div><div class="v">${inv.parentId ? `succeeds ${shortHash(inv.parentId)}` : "original — no parent"}</div>
+            <div class="k">calibration</div><div class="v">${inv.calibration.agreed} agreed / ${inv.calibration.disagreed} disagreed / ${inv.calibration.pending} pending (${inv.calibration.contestedInvolvement} in contested cases)</div>
+          </div>
+        </div>`,
+        )
+        .join("")}
+    `;
+  } catch (err) {
+    content.innerHTML = `<div class="empty">Could not load investigators: ${escapeHtml(String(err))}</div>`;
   }
 }
 
@@ -195,6 +245,14 @@ function renderChallengeCard(c: any): string {
     }
 
     ${
+      c.payouts.length > 0
+        ? `<div class="card"><h3>Investigator payouts — settled on 0G Chain, native value, same transaction as the verdict</h3>
+          ${c.payouts.map((p: any) => `<div class="rel-edge">${shortAddr(p.investigator)} received <strong>${p.amountWei} wei</strong> <span style="color:var(--ink-dim)">(${fmtTime(p.at)})</span></div>`).join("")}
+        </div>`
+        : ""
+    }
+
+    ${
       c.appeals.length > 0
         ? `<div class="card"><h3>Appeals (append-only — the original verdict above is never edited)</h3>
           ${c.appeals.map((a: any) => `<div class="rel-edge">appeal #${a.appealId} by ${shortAddr(a.filedBy)} — "${escapeHtml(a.reason)}" — ${a.resolved ? `resolved → ${a.newStatus}` : "pending"}</div>`).join("")}
@@ -204,13 +262,15 @@ function renderChallengeCard(c: any): string {
   `;
 }
 
-async function runDemo(which: "tamper" | "a" | "b") {
+async function runDemo(which: "tamper" | "a" | "b" | "c") {
   const content = document.getElementById("content")!;
   content.innerHTML = `<div class="loading">Running scenario ${which.toUpperCase()}… this drives real transactions against the configured chain (local devnet by default). This can take a few seconds.</div>`;
   try {
-    const trace = which === "tamper" ? await api.runTamper() : which === "a" ? await api.runScenarioA() : await api.runScenarioB();
+    const trace =
+      which === "tamper" ? await api.runTamper() : which === "a" ? await api.runScenarioA() : which === "b" ? await api.runScenarioB() : await api.runScenarioC();
     lastTrace = trace;
     selectedClaimId = null;
+    showInvestigators = false;
     await renderTrace(content, trace);
     await api.rebuild();
     await renderClaimList();
