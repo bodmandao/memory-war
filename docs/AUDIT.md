@@ -1,5 +1,49 @@
 # Final Audit
 
+> **Addendum — 0G-native integration pass.** A second pass added
+> pay-per-verification settlement, investigator payouts, portable
+> investigator identity (`InvestigatorRegistry.sol`), a DA batch-commitment
+> module (not wired to the runtime), and an agent-facing
+> `POST /agent/verify-claim` API. See `docs/0G_INTEGRATION.md` for what
+> was built and why, and `docs/ERC7857_DECISION.md` / `docs/DA_DECISION.md`
+> for the two "don't fake it" calls. The section below is the original
+> audit, left intact; here is what changed:
+>
+> - Test count: 60 → **76** unit/integration tests (protocol-core +
+>   zg-adapters) + 10 → **16** contract tests, all passing.
+> - Same "`at` collides with `Array.prototype.at`" bug recurred in the
+>   *new* `InvestigatorRegistry` events (`InvestigatorRegistered`,
+>   `ControllerRotated`) — same fix (rename to `occurredAt`), now with a
+>   regression assertion in the Hardhat test suite so it can't silently
+>   come back a third time.
+> - The rebuilt-`dist/` discipline bit again: after the `occurredAt`
+>   rename, the Solidity contract was recompiled but `zg-adapters`'
+>   TypeScript ABI wasn't rebuilt, so the indexer kept parsing the *old*
+>   ABI shape against the *new* on-chain events until the mismatch was
+>   caught by inspection (`registeredAt` showing `null`) — not by a
+>   test. No test currently guards "the compiled dist/ matches the
+>   current source"; noted as a P1 in the addendum below.
+> - The SIMULATED investigator's numeric-overlap heuristic didn't scale
+>   `"$25M"` the way it scaled `"$25,000,000"`, producing a wrong-looking
+>   REJECT on genuinely matching evidence — fixed, with a regression
+>   test (`compute.test.ts`).
+>
+> **Addendum P0/P1s:**
+> - **P0 (unchanged from the original audit):** 0G Storage/Compute live
+>   paths are still unexercised against the real network this pass —
+>   Priority 1's payment settlement is real on-chain value, but the
+>   *investigator execution* itself still ran in `SIMULATED` mode for
+>   every demo run in this pass, same as before.
+> - **P1 — no dist/source drift guard.** As seen above, a stale compiled
+>   package can silently serve an old ABI. Worth a pre-flight check
+>   (e.g. `npm run build` as a `pretest`/`predemo` hook) in a future pass.
+> - **P1 — 0G Pay does not exist as a distinct product to integrate**;
+>   documented honestly in `docs/0G_INTEGRATION.md` rather than faked.
+> - **P2 — DA and ERC-7857 both investigated and deliberately not
+>   used**; see their decision docs. Not a gap, a documented choice.
+
+---
+
 This is the honest report demanded by the build spec §26. It was written
 after running the actual test suites and a live end-to-end demo against
 a real deployed contract on a real (local) EVM — not written from intent.

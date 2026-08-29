@@ -1,7 +1,13 @@
 # MEMORY WAR
 
 A persistent, adversarially-tested knowledge layer for machine-generated
-claims, built on 0G.
+claims, built on 0G — and a verification service autonomous agents can
+pay to use: `POST /agent/verify-claim` runs pay → investigate → attest
+→ resolve end to end and returns a machine-readable, independently
+auditable result. See [`docs/0G_INTEGRATION.md`](docs/0G_INTEGRATION.md)
+for what's genuinely wired into the 0G ecosystem in this pass
+(pay-per-verification settlement, portable investigator identity) and
+what was deliberately left out (0G DA, ERC-7857) and why.
 
 ```
 CLAIM → EVIDENCE/JUSTIFICATION DAG → PREDICATE DISAMBIGUATION → TYPED CHALLENGE
@@ -45,7 +51,8 @@ npm test                # protocol-core + zg-adapters (vitest)
 npm run test:contracts  # MemoryWarRegistry (hardhat)
 
 # 4. run the demo end-to-end
-npm run demo:full        # tamper detection, then scenario A, then scenario B
+npm run demo:full        # tamper detection, then scenarios A, B, C
+npm run demo:c           # scenario C alone — pay-per-verification + portable investigator identity
 
 # 5. or drive it from the browser
 npm run demo:server      # terminal C — demo driver, :4401

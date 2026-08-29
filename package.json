@@ -16,6 +16,7 @@
     "demo:tamper": "tsx demo/tamper-demo.ts",
     "demo:a": "tsx demo/scenario-a.ts",
     "demo:b": "tsx demo/scenario-b.ts",
+    "demo:c": "tsx demo/scenario-c.ts",
     "demo:full": "tsx demo/run-all.ts",
     "demo:server": "tsx demo/server.ts",
     "chain:node": "npm run node --workspace=contracts",
