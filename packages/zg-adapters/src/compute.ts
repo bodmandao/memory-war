@@ -167,9 +167,9 @@ export class ZgComputeInvestigator {
    * this is an AI opinion.
    */
   private simulate(input: InvestigatorInput): { verdict: Report["verdict"]; confidence: number; reasoning: string } {
-    const claimNums = input.claimText.match(/[\d,.]+/g)?.map((s) => Number(s.replace(/,/g, ""))) ?? [];
+    const claimNums = extractScaledNumbers(input.claimText);
     const evidenceText = input.evidenceTexts.join(" ");
-    const evidenceNums = evidenceText.match(/[\d,.]+/g)?.map((s) => Number(s.replace(/,/g, ""))) ?? [];
+    const evidenceNums = extractScaledNumbers(evidenceText);
     const overlap = claimNums.some((n) => evidenceNums.some((e) => Math.abs(e - n) / Math.max(e, n, 1) < 0.03));
     if (evidenceTexts_empty(input)) {
       return { verdict: "INSUFFICIENT_EVIDENCE", confidence: 0.5, reasoning: "[SIMULATED] no evidence text supplied to inspect" };
@@ -204,6 +204,33 @@ export class ZgComputeInvestigator {
 
 function evidenceTexts_empty(input: InvestigatorInput): boolean {
   return input.evidenceTexts.length === 0 || input.evidenceTexts.every((t) => t.trim().length === 0);
+}
+
+/**
+ * Extracts numeric figures, scaled by a trailing k/m/b suffix — "$25M"
+ * and "$25,000,000" must compare equal for the SIMULATED stub's crude
+ * numeric-overlap check to mean anything. Mirrors protocol-core's
+ * predicate.ts parseMoney (kept local rather than shared: this is a
+ * best-effort heuristic for a stub investigator, not the protocol's
+ * own mechanical predicate-comparison logic).
+ */
+function extractScaledNumbers(text: string): number[] {
+  const matches = text.matchAll(/([\d,.]+)\s*(k|m|mm|million|b|bn|billion)?\b/gi);
+  const out: number[] = [];
+  for (const m of matches) {
+    const raw = m[1];
+    if (!raw) continue;
+    const num = Number(raw.replace(/,/g, ""));
+    if (Number.isNaN(num)) continue;
+    const scaleTok = (m[2] ?? "").toLowerCase();
+    const scale =
+      scaleTok === "k" ? 1_000
+      : scaleTok === "m" || scaleTok === "mm" || scaleTok === "million" ? 1_000_000
+      : scaleTok === "b" || scaleTok === "bn" || scaleTok === "billion" ? 1_000_000_000
+      : 1;
+    out.push(num * scale);
+  }
+  return out;
 }
 
 function buildPrompt(input: InvestigatorInput): string {

@@ -62,6 +62,19 @@ describe("ZgComputeInvestigator (local mode, no API keys — the SIMULATED floor
     expect(report.attestation.mode).toBe("SIMULATED");
   });
 
+  it("scales a claim's $25M against evidence's $25,000,000 as the same figure (regression: these must compare equal, not 25 vs 25000000)", async () => {
+    const investigator = new ZgComputeInvestigator("simulated-provider-d", { mode: "local" });
+    const report = await investigator.investigate({
+      claimId: h("claim"),
+      challengeId: h("challenge"),
+      claimText: "Protocol Z raised $25M",
+      evidenceTexts: ["Official announcement: Protocol Z closed a $25,000,000 seed round."],
+      evidenceBundleHash: hashUtf8("bundle"),
+      investigatorId: "0x4444444444444444444444444444444444444444",
+    });
+    expect(report.verdict).toBe("SUPPORTS");
+  });
+
   it("binds the report to the exact evidence bundle hash it was given", async () => {
     const investigator = new ZgComputeInvestigator("simulated-provider-a", { mode: "local" });
     const bundleHash = hashUtf8("specific-bundle-v1");
