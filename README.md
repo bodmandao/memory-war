@@ -30,8 +30,9 @@ packages/protocol-core   pure domain logic — no network, fully tested
 packages/zg-adapters     honest, mode-aware 0G Storage / Compute / Chain adapters
 contracts/               MemoryWarRegistry.sol + Hardhat tests
 apps/indexer             read-only query layer, rebuilt from chain events
-apps/web                 frontend — claim/evidence/investigation/verdict/history views
-demo/                    the two required demo scenarios + tamper detection
+apps/client              Next.js client — claims explorer, claim/challenge/verdict
+                         detail, investigator identities, playground, agent API demo
+demo/                    scenarios A/B/C + tamper detection + the agent-facing verify-claim API
 ```
 
 ## Quickstart (local devnet — no 0G credentials required)
@@ -42,8 +43,9 @@ npm install
 # 1. terminal A — local EVM devnet
 npm run chain:node
 
-# 2. terminal B — deploy the contract, then copy the printed address
-#    into .env as MEMORY_WAR_CONTRACT_ADDRESS (cp .env.example .env first)
+# 2. terminal B — deploy the contracts, then copy the two printed addresses
+#    into .env as MEMORY_WAR_CONTRACT_ADDRESS and INVESTIGATOR_REGISTRY_ADDRESS
+#    (cp .env.example .env first)
 npm run chain:deploy:local
 
 # 3. run the tests
@@ -57,18 +59,30 @@ npm run demo:c           # scenario C alone — pay-per-verification + portable 
 # 5. or drive it from the browser
 npm run demo:server      # terminal C — demo driver, :4401
 npm run indexer:dev      # terminal D — read-only query API, :4400
-npm run web:dev          # terminal E — frontend, :4402
+npm run client:dev       # terminal E — client (Next.js), :4402
 ```
+
+Open `http://localhost:4402`. `/` is the landing dashboard with live
+protocol stats; `/claims` and `/claims/[id]` are the claims explorer and
+detail view (evidence, challenge, investigation, resolution, dissent,
+payouts); `/investigators` and `/investigators/[id]` cover portable
+investigator identity and calibration; `/playground` runs the four demo
+scenarios above from the browser with a live step trace; `/verify`
+documents and lets you try `POST /agent/verify-claim` directly. All of
+it reads real indexed on-chain state and triggers real transactions —
+nothing in the client is mocked or pre-recorded.
 
 ## Connecting to the live 0G network
 
 Copy `.env.example` to `.env` and fill in `CHAIN_RPC_URL` (0G Galileo
 testnet), `CHAIN_PRIVATE_KEY` (a funded testnet wallet — see
 `docs/AUDIT.md` for exactly what this repository has and hasn't
-deployed live), `ZG_STORAGE_INDEXER_RPC`, and `ZG_STORAGE_MODE=live` /
-`ZG_COMPUTE_MODE=live`. Every adapter falls back honestly to a labeled
+deployed live), `OG_STORAGE_INDEXER_RPC`, and `OG_STORAGE_MODE=live` /
+`OG_COMPUTE_MODE=live`. Every adapter falls back honestly to a labeled
 local mode if live configuration is missing or fails — see
-`packages/zg-adapters/src/storage.ts` and `compute.ts`.
+`packages/zg-adapters/src/storage.ts` and `compute.ts`. See
+`docs/0G_INTEGRATION.md` for exactly what's real, simulated, or
+deliberately not integrated (0G Pay, 0G DA, ERC-7857) and why.
 
 ## Design documents
 
