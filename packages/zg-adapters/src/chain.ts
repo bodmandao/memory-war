@@ -82,7 +82,26 @@ export class ZgChainAdapter {
     if (!address) throw new Error("MEMORY_WAR_CONTRACT_ADDRESS is required — deploy the contract first (npm run chain:deploy:local)");
     this.investigatorRegistryAddress = config.investigatorRegistryAddress ?? process.env.INVESTIGATOR_REGISTRY_ADDRESS;
 
-    this.provider = new JsonRpcProvider(this.rpcUrl);
+    // cacheTimeout disabled (default is 250ms): ethers' AbstractProvider
+    // memoizes identical in-flight/recent RPC calls — same method + same
+    // params — and hands every caller within that window the same cached
+    // promise. eth_getTransactionCount(address, "pending") is such a call.
+    // Two writes from the same signer issued back-to-back (e.g. two
+    // sequential contract calls in one scenario step) can both resolve
+    // their nonce inside that 250ms window: the first genuinely queries
+    // the node, the second is handed the *same* cached "pending" value
+    // instead of a fresh one — even though Hardhat's instant automining
+    // already consumed that nonce for the first transaction. The result
+    // is two transactions signed with the identical nonce, and the
+    // second is rejected as NONCE_EXPIRED ("Nonce too low"). This is not
+    // a chain-level race (each adapter's own reads and writes are
+    // ordered); it is this client-side read cache handing back a stale
+    // answer. Disabling it costs, at most, a handful of extra
+    // eth_getTransactionCount calls per scenario — it does not touch
+    // `pollingInterval` and does not change how fast `.wait()` observes
+    // confirmations, so there is no latency tradeoff here, correctness
+    // only. See docs/AUDIT.md.
+    this.provider = new JsonRpcProvider(this.rpcUrl, undefined, { cacheTimeout: -1 });
     this.signer = privateKey ? new Wallet(privateKey, this.provider) : (this.provider as unknown as Signer);
     this.contract = new Contract(address, MEMORY_WAR_ABI, this.signer);
     this.investigatorRegistry = this.investigatorRegistryAddress
