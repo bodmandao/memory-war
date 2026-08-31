@@ -8,7 +8,9 @@ const ICONS: Record<string, JSX.Element> = {
   evidence: <path d="M12 3 4 7v5c0 5 3.5 8.5 8 9 4.5-.5 8-4 8-9V7l-8-4Z M9 12l2 2 4-4" />,
   challenge: <path d="M12 2 3 6.5V12c0 5.5 3.8 9.7 9 11 5.2-1.3 9-5.5 9-11V6.5L12 2Z M12 8v5 M12 16.2v.1" />,
   investigators: <path d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14Z M16 16l5 5" />,
+  attestation: <path d="M12 2 3 6.5V12c0 5.5 3.8 9.7 9 11 5.2-1.3 9-5.5 9-11V6.5L12 2Z M8.5 12l2.3 2.3L15.5 9.5" />,
   resolution: <path d="M4 12l5 5L20 6" />,
+  settlement: <path d="M4 8h16 M4 8l1.5-4h13L20 8 M6 8v10a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V8 M9.5 12.5a2.5 2.5 0 1 0 5 0 2.5 2.5 0 0 0-5 0Z" />,
   history: <path d="M12 21a9 9 0 1 0-9-9 M3 12H1.5 M12 7v5l3.5 2 M4.6 4.6l1.2 1.2" />,
 };
 
@@ -16,9 +18,11 @@ const STAGES = [
   { key: "claim", label: "Claim", downstream: "evidence gets committed", detail: "A machine-generated statement is recorded, content-addressed, and given a permanent identifier. It is never treated as fact by default." },
   { key: "evidence", label: "Evidence", downstream: "disagreement creates a challenge", detail: "Supporting material is committed as a content-addressed bundle before any dispute begins, so it can't be altered retroactively without detection." },
   { key: "challenge", label: "Challenge", downstream: "independent investigators examine it", detail: "A genuine contradiction can be bonded and disputed on-chain. A claim that merely relates, refines, or narrows another is never forced into an adversarial fight." },
-  { key: "investigators", label: "Investigators", downstream: "reports enter mechanical resolution", detail: "Independent identities evaluate the evidence without coordinating with each other, and issue signed, attestable reports." },
-  { key: "resolution", label: "Resolution", downstream: "final state becomes persistent history", detail: "A disclosed, mechanical procedure — not a vote, not an admin — turns the reports into a verdict. Disagreement is preserved as CONTESTED, never averaged away." },
-  { key: "history", label: "History", downstream: null, detail: "The verdict settles on-chain and the claim's full record — including anything that superseded it — stays permanently queryable. Nothing is deleted." },
+  { key: "investigators", label: "Investigators", downstream: "each report is issued through 0G Compute", detail: "Independent identities evaluate the locked evidence without coordinating with each other, and issue signed reports." },
+  { key: "attestation", label: "0G TEE Attestation", downstream: "attested reports enter mechanical resolution", detail: "Each report is run through 0G Compute with TEE attestation, independently verified on testnet in this build — attestation proves a specific model produced a specific output from a specific input, never that the claim itself is true." },
+  { key: "resolution", label: "Resolution", downstream: "the verdict settles atomically with payment", detail: "A disclosed, mechanical procedure (mw-default/v1) — not a vote, not an admin — turns the reports into a verdict. Disagreement is preserved as CONTESTED, never averaged away." },
+  { key: "settlement", label: "Settlement", downstream: "the resolved case becomes permanent history", detail: "Investigator fees are paid on-chain in the same transaction as the verdict — real native-token settlement, not a separate payments layer." },
+  { key: "history", label: "History", downstream: null, detail: "The claim's full record — including anything that superseded it — stays permanently queryable. Nothing is deleted." },
 ] as const;
 
 function StageIcon({ stageKey, active }: { stageKey: string; active: boolean }) {
@@ -43,7 +47,7 @@ export function ProtocolFlow() {
   return (
     <div className="rounded-xl border border-line bg-surface p-6 sm:p-7">
       {/* Desktop: horizontal chain */}
-      <div className="hidden sm:block">
+      <div className="hidden lg:block">
         <div className="flex items-center">
           {STAGES.map((stage, i) => (
             <div key={stage.key} className="flex flex-1 items-center last:flex-none">
@@ -81,8 +85,8 @@ export function ProtocolFlow() {
         </div>
       </div>
 
-      {/* Mobile: vertical chain */}
-      <div className="space-y-0 sm:hidden">
+      {/* Mobile / tablet: vertical chain (8 stages is too dense for a horizontal row below lg) */}
+      <div className="space-y-0 lg:hidden">
         {STAGES.map((stage, i) => (
           <div key={stage.key}>
             <motion.button

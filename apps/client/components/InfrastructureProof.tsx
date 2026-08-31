@@ -3,22 +3,10 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { Health } from "@/lib/types";
+import { networkFromRpc } from "@/lib/network";
 import { Hash } from "./Hash";
 import { InfraBadge } from "./Badge";
 import { Skeleton } from "./States";
-
-const NETWORK_BY_RPC: Record<string, { name: string; chainId: string }> = {
-  "evmrpc.0g.ai": { name: "0G Mainnet", chainId: "16661" },
-  "evmrpc-testnet.0g.ai": { name: "0G Testnet (Galileo)", chainId: "16602" },
-};
-
-function networkFromRpc(rpcUrl: string | undefined): { name: string; chainId: string } {
-  if (!rpcUrl) return { name: "unknown", chainId: "—" };
-  const match = Object.entries(NETWORK_BY_RPC).find(([host]) => rpcUrl.includes(host));
-  if (match) return match[1];
-  if (rpcUrl.includes("127.0.0.1") || rpcUrl.includes("localhost")) return { name: "Local devnet", chainId: "31337" };
-  return { name: "custom RPC", chainId: "—" };
-}
 
 /**
  * Real values only — the network name/chain ID are derived from
@@ -51,7 +39,7 @@ export function InfrastructureProof() {
   }, []);
 
   const network = networkFromRpc(health?.rpcUrl);
-  const isMainnet = network.name === "0G Mainnet";
+  const isMainnet = network.isMainnet;
 
   return (
     <div className="rounded-xl border border-line bg-surface p-6 sm:p-7">

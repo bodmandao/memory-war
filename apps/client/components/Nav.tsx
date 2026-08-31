@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { api } from "@/lib/api";
 import type { Health } from "@/lib/types";
+import { networkFromRpc } from "@/lib/network";
 
 const LINKS = [
   { href: "/claims", label: "Claims" },
@@ -42,6 +43,8 @@ export function Nav() {
   }, [pathname]);
 
   const online = !!health?.ok;
+  const network = networkFromRpc(health?.rpcUrl);
+  const statusLabel = online ? `${network.name.toUpperCase()} · LIVE` : "OFFLINE";
 
   return (
     <header className="sticky top-0 z-40 border-b border-line bg-ground/85 backdrop-blur">
@@ -70,7 +73,7 @@ export function Nav() {
             title={health?.rpcUrl}
           >
             <span className={`h-1.5 w-1.5 rounded-full ${online ? "bg-true_" : "bg-ink-faint"}`} aria-hidden />
-            <span>{online ? `Indexer online · ${health!.eventCount} events` : "Indexer offline"}</span>
+            <span>{statusLabel}</span>
           </div>
           <Link
             href="/verify"
@@ -114,7 +117,7 @@ export function Nav() {
               </Link>
               <div className="mt-2 flex items-center gap-2 px-2 font-mono text-[11px] text-ink-faint">
                 <span className={`h-1.5 w-1.5 rounded-full ${online ? "bg-true_" : "bg-ink-faint"}`} aria-hidden />
-                {online ? `Indexer online · ${health!.eventCount} events` : "Indexer offline"}
+                {statusLabel}
               </div>
             </div>
           </motion.nav>

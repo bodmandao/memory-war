@@ -10,6 +10,7 @@ import { Card } from "@/components/Card";
 import { ProtocolFlow } from "@/components/ProtocolFlow";
 import { NetworkBackground } from "@/components/NetworkBackground";
 import { InfrastructureProof } from "@/components/InfrastructureProof";
+import { FlagshipCase } from "@/components/FlagshipCase";
 import { IndexerUnavailable, LocalDemonstrationNote } from "@/components/States";
 import { DashboardMetricsSkeleton } from "@/components/Skeletons";
 
@@ -71,6 +72,8 @@ export default function LandingPage() {
         <h2 className="mb-4 text-[13px] font-semibold uppercase tracking-wide text-ink-faint">How a claim moves through the protocol</h2>
         <ProtocolFlow />
       </section>
+
+      <FlagshipCase />
 
       {/* Live stats — dominant, first thing under the hero */}
       <section>

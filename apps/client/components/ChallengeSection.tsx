@@ -37,27 +37,27 @@ export function ChallengeSection({
       <>
         <Stage n={stageStart} label="Evidence">
           <Card>
-            <EmptyState>No challenge has been opened against this claim yet — evidence is committed once one is.</EmptyState>
+            <EmptyState title="Not triggered">No challenge has been opened against this claim yet — evidence is committed once one is.</EmptyState>
           </Card>
         </Stage>
         <Stage n={stageStart + 1} label="Challenge">
           <Card>
-            <EmptyState>No challenge or verification request opened against this claim yet.</EmptyState>
+            <EmptyState title="Not triggered">No challenge or verification request opened against this claim yet.</EmptyState>
           </Card>
         </Stage>
         <Stage n={stageStart + 2} label="Investigation">
           <Card>
-            <EmptyState>No investigators assigned — investigation only begins once a challenge is opened.</EmptyState>
+            <EmptyState title="Not triggered">No investigators assigned — investigation only begins once a challenge is opened.</EmptyState>
           </Card>
         </Stage>
         <Stage n={stageStart + 3} label="Resolution">
           <Card>
-            <EmptyState>No verdict — nothing has been resolved for this claim yet.</EmptyState>
+            <EmptyState title="Pending">No verdict — nothing has been resolved for this claim yet.</EmptyState>
           </Card>
         </Stage>
         <Stage n={stageStart + 4} label="Settlement" last>
           <Card>
-            <EmptyState>No on-chain settlement yet.</EmptyState>
+            <EmptyState title="Pending">No on-chain settlement yet.</EmptyState>
           </Card>
         </Stage>
       </>
@@ -80,7 +80,7 @@ export function ChallengeSection({
           </Card>
         ) : (
           <Card>
-            <EmptyState>No evidence submitted for this challenge yet.</EmptyState>
+            <EmptyState title="No data">No evidence submitted for this challenge yet.</EmptyState>
           </Card>
         )}
       </Stage>
@@ -106,7 +106,7 @@ export function ChallengeSection({
       <Stage n={stageStart + 2} label="Investigation">
         <Card subtitle="Each investigator evaluates independently, with no visibility into the others' conclusions before submitting.">
           {challenge.reports.length === 0 ? (
-            <EmptyState>No reports submitted yet.</EmptyState>
+            <EmptyState title="Pending">No reports submitted yet.</EmptyState>
           ) : (
             <>
               <InvestigatorComparison reports={challenge.reports} investigatorProviders={investigatorProviders} />
@@ -166,10 +166,16 @@ export function ChallengeSection({
       <Stage n={stageStart + 3} label="Resolution">
         <Card title="Mechanical, not discretionary" subtitle="Derived on-chain from the reports above; a caller cannot resolve to any status those reports don't support.">
           {!challenge.verdict ? (
-            <EmptyState>{challenge.reports.length > 0 ? "Reports are in, but this case hasn't been resolved on-chain yet." : "Not yet resolved — awaiting reports."}</EmptyState>
+            <EmptyState title="Pending">
+              {challenge.reports.length > 0 ? "Reports are in, but this case hasn't been resolved on-chain yet." : "Not yet resolved — awaiting reports."}
+            </EmptyState>
           ) : (
             <>
-              <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-accent-dim bg-accent-soft/40 px-4 py-3 text-[13px]">
+              <div
+                className={`mb-4 flex flex-wrap items-center gap-2 rounded-lg border px-4 py-3 text-[13px] ${
+                  challenge.verdict.status === "CONTESTED" ? "border-contested/40 bg-contested/10" : "border-accent-dim bg-accent-soft/40"
+                }`}
+              >
                 <span className="rounded-full border border-line px-2 py-0.5 font-mono text-[11px] text-ink-dim">mw-default/v1</span>
                 <span className="font-mono text-ink">
                   {challenge.reports.length} independent investigator{challenge.reports.length === 1 ? "" : "s"} →{" "}
@@ -206,7 +212,7 @@ export function ChallengeSection({
       <Stage n={stageStart + 4} label="Settlement" last>
         <Card subtitle="Real on-chain native-value transfers, settled in the same transaction as the verdict above.">
           {challenge.payouts.length === 0 ? (
-            <EmptyState>No on-chain settlement yet.</EmptyState>
+            <EmptyState title="Pending">No on-chain settlement yet.</EmptyState>
           ) : (
             <KV
               rows={[
