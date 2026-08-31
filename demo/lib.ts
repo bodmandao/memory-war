@@ -114,7 +114,7 @@ export async function runScenarioA(): Promise<DemoTrace> {
   }
 
   const tx = await chain.contract.recordRelationship(claimAId, claimBId, relationTypeIndex(relationship.relation));
-  await tx.wait();
+  await waitRobust(tx);
   steps.push({
     label: "RELATES_TO edge recorded — NO bond, NO challenge, NO investigation",
     detail: "Both claims stand side by side. This is the semantic sophistication the naive version of this protocol would not have.",
@@ -156,7 +156,7 @@ export async function runScenarioB(): Promise<DemoTrace> {
 
   const bond = 1_000_000_000_000_000n; // 0.001 native token — deliberately small, spec §10: minimal bonding, no tokenomics
   const openTx = await challengerChain.contract.openChallenge(claimId, 0 /* CONTRADICTION */, { value: bond });
-  const openReceipt = await openTx.wait();
+  const openReceipt = await waitRobust(openTx);
   const opened = await findEventInReceipt(challengerChain, openReceipt, challengerChain.contract.interface, "ChallengeOpened");
   const challengeId = opened.args.challengeId as string;
   steps.push({ label: "Bonded CONTRADICTION challenge opened", detail: `challengeId=${challengeId} bond=${bond} wei`, data: { challengeId } });
@@ -166,15 +166,15 @@ export async function runScenarioB(): Promise<DemoTrace> {
   const up1 = await storage.upload(textToBytes(evidenceForClaim));
   const up2 = await storage.upload(textToBytes(evidenceForCounter));
 
-  await (await authorChain.contract.submitEvidence(challengeId, ev1.id)).wait();
-  await (await challengerChain.contract.submitEvidence(challengeId, ev2.id)).wait();
+  await waitRobust(await authorChain.contract.submitEvidence(challengeId, ev1.id));
+  await waitRobust(await challengerChain.contract.submitEvidence(challengeId, ev2.id));
   steps.push({ label: "Evidence submitted by both sides", detail: `ev1=${ev1.id} (${up1.mode}), ev2=${ev2.id} (${up2.mode})` });
 
   const bundle = lockBundle(buildBundle(challengeId as Hash, [ev1.id, ev2.id]), nowSec());
-  await (await authorChain.contract.lockEvidence(challengeId, bundle.root)).wait();
+  await waitRobust(await authorChain.contract.lockEvidence(challengeId, bundle.root));
   steps.push({ label: "Evidence bundle locked", detail: `root=${bundle.root} (order-independent commitment — see protocol-core/evidence.ts)` });
 
-  await (await authorChain.contract.beginInvestigation(challengeId)).wait();
+  await waitRobust(await authorChain.contract.beginInvestigation(challengeId));
   steps.push({ label: "Investigation started", detail: "independent investigators now pull the locked bundle" });
 
   const investigatorA = new ZgComputeInvestigator("provider-alpha");
@@ -229,7 +229,7 @@ export async function runScenarioB(): Promise<DemoTrace> {
   await waitForChallengeWindow(authorChain, challengeId);
   const statusIndex = verdictStatusIndex(verdict.status);
   const resolveTx = await authorChain.contract.resolve(challengeId, statusIndex, verdict.procedureHash, verdict.reportsRoot, hashUtf8(JSON.stringify(verdict.dissent)));
-  await resolveTx.wait();
+  await waitRobust(resolveTx);
   steps.push({ label: "Verdict committed on-chain", detail: `status=${verdict.status}`, data: { challengeId, txHash: resolveTx.hash } });
 
   const claimRecord = await authorChain.contract.claims(claimId);
@@ -277,7 +277,7 @@ export async function runScenarioC(): Promise<DemoTrace> {
 
   const fee = 2_000_000_000_000_000n; // 0.002 native token — the verification fee, paid entirely to investigators (spec Priority 1)
   const reqTx = await agentChain.contract.requestVerification(claimId, { value: fee });
-  const reqReceipt = await reqTx.wait();
+  const reqReceipt = await waitRobust(reqTx);
   const opened = await findEventInReceipt(agentChain, reqReceipt, agentChain.contract.interface, "ChallengeOpened");
   const requestId = opened.args.challengeId as string;
   steps.push({
@@ -297,10 +297,10 @@ export async function runScenarioC(): Promise<DemoTrace> {
 
   const ev = makeEvidence({ bytes: textToBytes(evidenceText), sourceType: "ONCHAIN_STATE", submittedBy: await authorChain.signer.getAddress() as `0x${string}`, submittedAt: nowSec() });
   await storage.upload(textToBytes(evidenceText));
-  await (await authorChain.contract.submitEvidence(requestId, ev.id)).wait();
+  await waitRobust(await authorChain.contract.submitEvidence(requestId, ev.id));
   const bundle = lockBundle(buildBundle(requestId as Hash, [ev.id]), nowSec());
-  await (await authorChain.contract.lockEvidence(requestId, bundle.root)).wait();
-  await (await authorChain.contract.beginInvestigation(requestId)).wait();
+  await waitRobust(await authorChain.contract.lockEvidence(requestId, bundle.root));
+  await waitRobust(await authorChain.contract.beginInvestigation(requestId));
   steps.push({ label: "Evidence locked, investigation started", detail: `evidenceRoot=${bundle.root}` });
 
   const investigatorA = new ZgComputeInvestigator("provider-alpha");
@@ -345,7 +345,7 @@ export async function runScenarioC(): Promise<DemoTrace> {
 
   const statusIndex = verdictStatusIndex(verdict.status);
   const resolveTx = await authorChain.contract.resolve(requestId, statusIndex, verdict.procedureHash, verdict.reportsRoot, hashUtf8(JSON.stringify(verdict.dissent)));
-  const resolveReceipt = await resolveTx.wait();
+  const resolveReceipt = await waitRobust(resolveTx);
   const payouts = resolveReceipt.logs
     .map((l: any) => authorChain.contract.interface.parseLog(l))
     .filter((e: any) => e?.name === "InvestigatorPaid")
@@ -392,6 +392,7 @@ export interface AgentVerifyResult {
   investigationId: string;
   investigators: Array<{ address: string; investigatorId: string; modelProvider: string; verdict: string; attestation: unknown }>;
   attestation: { anyLiveTee: boolean; modes: string[] };
+  procedure: { id: string; version: string; procedureHash: string };
   payment: { feeWei: string; payouts: Array<{ investigator: string; amountWei: string }> };
   history: { claimId: string; onChainTxHash: string; queryUrl: string };
 }
@@ -409,7 +410,7 @@ export async function agentVerifyClaim(input: AgentVerifyInput): Promise<AgentVe
 
   const fee = 2_000_000_000_000_000n;
   const reqTx = await agentChain.contract.requestVerification(claimId, { value: fee });
-  const reqReceipt = await reqTx.wait();
+  const reqReceipt = await waitRobust(reqTx);
   const requestId = (await findEventInReceipt(agentChain, reqReceipt, agentChain.contract.interface, "ChallengeOpened")).args.challengeId as string;
 
   const investigatorAChain = await makeChain("investigatorA");
@@ -421,12 +422,12 @@ export async function agentVerifyClaim(input: AgentVerifyInput): Promise<AgentVe
   for (const text of input.evidence) {
     const ev = makeEvidence({ bytes: textToBytes(text), sourceType: "OTHER", submittedBy: await authorChain.signer.getAddress() as `0x${string}`, submittedAt: nowSec() });
     await storage.upload(textToBytes(text));
-    await (await authorChain.contract.submitEvidence(requestId, ev.id)).wait();
+    await waitRobust(await authorChain.contract.submitEvidence(requestId, ev.id));
     evidenceIds.push(ev.id);
   }
   const bundle = lockBundle(buildBundle(requestId as Hash, evidenceIds), nowSec());
-  await (await authorChain.contract.lockEvidence(requestId, bundle.root)).wait();
-  await (await authorChain.contract.beginInvestigation(requestId)).wait();
+  await waitRobust(await authorChain.contract.lockEvidence(requestId, bundle.root));
+  await waitRobust(await authorChain.contract.beginInvestigation(requestId));
 
   const investigatorA = new ZgComputeInvestigator("provider-alpha");
   const investigatorB = new ZgComputeInvestigator("provider-beta");
@@ -456,7 +457,7 @@ export async function agentVerifyClaim(input: AgentVerifyInput): Promise<AgentVe
 
   const statusIndex = verdictStatusIndex(verdict.status);
   const resolveTx = await authorChain.contract.resolve(requestId, statusIndex, verdict.procedureHash, verdict.reportsRoot, hashUtf8(JSON.stringify(verdict.dissent)));
-  const resolveReceipt = await resolveTx.wait();
+  const resolveReceipt = await waitRobust(resolveTx);
   const payouts = resolveReceipt.logs
     .map((l: any) => authorChain.contract.interface.parseLog(l))
     .filter((e: any) => e?.name === "InvestigatorPaid")
@@ -477,6 +478,7 @@ export async function agentVerifyClaim(input: AgentVerifyInput): Promise<AgentVe
       anyLiveTee: [reportA, reportB].some((r) => r.attestation.mode === "0G_COMPUTE_TEE" && r.attestation.verified),
       modes: [reportA.attestation.mode, reportB.attestation.mode],
     },
+    procedure: { id: verdict.procedureId, version: verdict.procedureVersion, procedureHash: verdict.procedureHash },
     payment: { feeWei: fee.toString(), payouts },
     history: { claimId, onChainTxHash: resolveTx.hash, queryUrl: `/claims/${claimId}` },
   };
@@ -488,7 +490,7 @@ export async function agentVerifyClaim(input: AgentVerifyInput): Promise<AgentVe
 async function registerInvestigatorIdentity(chain: ZgChainAdapter, modelProvider: string): Promise<string> {
   if (!chain.investigatorRegistry) throw new Error("investigatorRegistry not configured on this chain adapter");
   const tx = await chain.investigatorRegistry.register(modelProvider, "0x" + "0".repeat(64));
-  const receipt = await tx.wait();
+  const receipt = await waitRobust(tx);
   const event = await findEventInReceipt(chain, receipt, chain.investigatorRegistry.interface, "InvestigatorRegistered");
   return event.args.investigatorId as string;
 }
@@ -498,7 +500,7 @@ async function submitReportAsIdentityOnChain(chain: ZgChainAdapter, challengeId:
   const attestationModeIndex = report.attestation.mode === "0G_COMPUTE_TEE" ? 0 : report.attestation.mode === "LOCAL_LLM" ? 1 : 2;
   const commitment = hashUtf8(JSON.stringify({ ...report, investigatorId: undefined }));
   const tx = await chain.contract.submitReportAsIdentity(challengeId, investigatorId, evidenceBundleHash, commitment, verdictIndex, attestationModeIndex, report.attestation.verified);
-  await tx.wait();
+  await waitRobust(tx);
 }
 
 export async function runTamperDemo(): Promise<DemoTrace> {
@@ -535,6 +537,30 @@ export async function runTamperDemo(): Promise<DemoTrace> {
 
 function nowSec() {
   return Math.floor(Date.now() / 1000);
+}
+
+/**
+ * `tx.wait()` can throw outright on 0G mainnet's own public RPC — not
+ * just return a receipt with incomplete logs (that case is
+ * `findEventInReceipt` below); the underlying `eth_getTransactionReceipt`
+ * poll itself can fail with the RPC's own "no matching receipts found:
+ * this may indicate potential data corruption". Retries the wait a
+ * bounded number of times on that specific transient-RPC error class
+ * before giving up — anything else (a real revert, a genuinely
+ * different failure) still surfaces immediately, never silently
+ * swallowed.
+ */
+async function waitRobust(tx: { wait(): Promise<any> }, retries = 4, delayMs = 2000): Promise<any> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await tx.wait();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const transient = /no matching receipts found|could not coalesce error/i.test(message);
+      if (!transient || attempt >= retries) throw err;
+      await new Promise((res) => setTimeout(res, delayMs));
+    }
+  }
 }
 
 /**
@@ -578,14 +604,18 @@ async function findEventInReceipt(
       );
     }
     await new Promise((res) => setTimeout(res, delayMs));
-    const fresh = await chain.provider.getTransactionReceipt(receipt.hash);
-    if (fresh) logs = fresh.logs;
+    try {
+      const fresh = await chain.provider.getTransactionReceipt(receipt.hash);
+      if (fresh) logs = fresh.logs;
+    } catch {
+      // same transient-RPC class as waitRobust — just loop and retry again
+    }
   }
 }
 
 async function createClaimOnChain(chain: ZgChainAdapter, predicateHash: Hash, textHash: Hash, predicate: unknown): Promise<string> {
   const tx = await chain.contract.createClaim(predicateHash, textHash, nowSec());
-  const receipt = await tx.wait();
+  const receipt = await waitRobust(tx);
   const event = await findEventInReceipt(chain, receipt, chain.contract.interface, "ClaimCreated");
   return event.args.claimId as string;
 }
@@ -595,7 +625,7 @@ async function submitReportOnChain(chain: ZgChainAdapter, challengeId: string, e
   const attestationModeIndex = report.attestation.mode === "0G_COMPUTE_TEE" ? 0 : report.attestation.mode === "LOCAL_LLM" ? 1 : 2;
   const commitment = hashUtf8(JSON.stringify({ ...report, investigatorId: undefined }));
   const tx = await chain.contract.submitReport(challengeId, evidenceBundleHash, commitment, verdictIndex, attestationModeIndex, report.attestation.verified);
-  await tx.wait();
+  await waitRobust(tx);
 }
 
 async function waitForChallengeWindow(chain: ZgChainAdapter, challengeId: string) {
