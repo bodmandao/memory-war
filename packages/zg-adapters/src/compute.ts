@@ -53,7 +53,7 @@ export class ZgComputeInvestigator {
     private readonly modelProvider: string,
     private readonly config: ComputeConfig = {},
   ) {
-    this.requestedMode = config.mode ?? (process.env.ZG_COMPUTE_MODE as any) ?? "auto";
+    this.requestedMode = config.mode ?? (process.env.OG_COMPUTE_MODE as any) ?? "auto";
   }
 
   async investigate(input: InvestigatorInput): Promise<Report> {
@@ -91,44 +91,69 @@ export class ZgComputeInvestigator {
   }
 
   private async tryLive(input: InvestigatorInput): Promise<{ verdict: Report["verdict"]; confidence: number; reasoning: string; attested: boolean } | null> {
-    const chainRpc = this.config.chainRpc ?? process.env.CHAIN_RPC_URL;
-    const privateKey = this.config.privateKey ?? process.env.CHAIN_PRIVATE_KEY;
+    // Deliberately separate from the chain-deployment wallet: 0G Compute
+    // is not documented as available on 0G mainnet at all (verified
+    // against docs.0g.ai's mainnet overview — no compute broker endpoint
+    // listed there), so this reads its OWN network/key pair first —
+    // OG_COMPUTE_CHAIN_RPC_URL / COMPUTE_PRIVATE_KEY — and only falls
+    // back to the shared CHAIN_RPC_URL / CHAIN_PRIVATE_KEY when those
+    // aren't set, so a deployment wallet funded on a different network
+    // than the compute wallet can never be silently reused here.
+    const chainRpc = this.config.chainRpc ?? process.env.OG_COMPUTE_CHAIN_RPC_URL ?? process.env.CHAIN_RPC_URL;
+    const privateKey = this.config.privateKey ?? process.env.COMPUTE_PRIVATE_KEY ?? process.env.CHAIN_PRIVATE_KEY;
     if (!chainRpc || !privateKey) return null;
 
     const { ethers } = await import("ethers");
     const { createZGComputeNetworkBroker } = await import("@0gfoundation/0g-compute-ts-sdk");
     const provider = new ethers.JsonRpcProvider(chainRpc);
-    const wallet = new ethers.Wallet(privateKey, provider);
-    const broker = await createZGComputeNetworkBroker(wallet as unknown as any);
+    try {
+      const wallet = new ethers.Wallet(privateKey, provider);
+      const broker = await createZGComputeNetworkBroker(wallet as unknown as any);
 
-    const services = await broker.inference.listService();
-    const chosen = this.config.providerAddress
-      ? services.find((s: any) => s.providerAddress === this.config.providerAddress)
-      : services[0];
-    if (!chosen) return null;
-    const providerAddress = (chosen as any).providerAddress;
+      const services = await broker.inference.listService();
+      // The installed @0gfoundation/0g-compute-ts-sdk exposes the
+      // provider's address as `.provider` on each listed service, not
+      // `.providerAddress` — confirmed by inspecting a real listService()
+      // response against live testnet (see docs/AUDIT.md); the previous
+      // field name silently resolved to `undefined` and only failed later,
+      // inside the SDK's own transferFund() call ("unsupported addressable
+      // value"), which is why this was never caught before this pass
+      // actually exercised the live path.
+      const chosen = this.config.providerAddress
+        ? services.find((s: any) => s.provider === this.config.providerAddress)
+        : services[0];
+      if (!chosen) return null;
+      const providerAddress = (chosen as any).provider;
 
-    await broker.ledger.transferFund(providerAddress, "inference", BigInt(1e15)); // small top-up; auto-acknowledges provider
-    const { endpoint, model } = await broker.inference.getServiceMetadata(providerAddress);
-    const headers = await broker.inference.getRequestHeaders(providerAddress);
+      await broker.ledger.transferFund(providerAddress, "inference", BigInt(1e15)); // small top-up; auto-acknowledges provider
+      const { endpoint, model } = await broker.inference.getServiceMetadata(providerAddress);
+      const headers = await broker.inference.getRequestHeaders(providerAddress);
 
-    const prompt = buildPrompt(input);
-    const response = await fetch(`${endpoint}/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...headers },
-      body: JSON.stringify({ model, messages: [{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: prompt }] }),
-    });
-    const data = (await response.json()) as any;
-    const content = data.choices?.[0]?.message?.content ?? "";
-    const parsed = parseVerdictJson(content);
+      const prompt = buildPrompt(input);
+      const response = await fetch(`${endpoint}/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...headers },
+        body: JSON.stringify({ model, messages: [{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: prompt }] }),
+      });
+      const data = (await response.json()) as any;
+      const content = data.choices?.[0]?.message?.content ?? "";
+      const parsed = parseVerdictJson(content);
 
-    const chatID = response.headers.get("ZG-Res-Key") ?? data.id;
-    let attested = false;
-    if (chatID) {
-      attested = (await broker.inference.processResponse(providerAddress, chatID)) ?? false;
+      const chatID = response.headers.get("ZG-Res-Key") ?? data.id;
+      let attested = false;
+      if (chatID) {
+        attested = (await broker.inference.processResponse(providerAddress, chatID)) ?? false;
+      }
+
+      return { ...parsed, attested };
+    } finally {
+      // Same leaked-background-polling class of bug fixed in chain.ts's
+      // trackedChains/destroyTrackedChains earlier in this project — an
+      // ethers JsonRpcProvider keeps polling in the background until
+      // explicitly destroyed, which was the reason a one-shot script
+      // driving this path couldn't exit on its own after a real call.
+      provider.destroy();
     }
-
-    return { ...parsed, attested };
   }
 
   private async tryLocalLlm(input: InvestigatorInput): Promise<{ verdict: Report["verdict"]; confidence: number; reasoning: string } | null> {
@@ -167,16 +192,38 @@ export class ZgComputeInvestigator {
    * this is an AI opinion.
    */
   private simulate(input: InvestigatorInput): { verdict: Report["verdict"]; confidence: number; reasoning: string } {
-    const claimNums = extractScaledNumbers(input.claimText);
-    const evidenceText = input.evidenceTexts.join(" ");
-    const evidenceNums = extractScaledNumbers(evidenceText);
-    const overlap = claimNums.some((n) => evidenceNums.some((e) => Math.abs(e - n) / Math.max(e, n, 1) < 0.03));
     if (evidenceTexts_empty(input)) {
       return { verdict: "INSUFFICIENT_EVIDENCE", confidence: 0.5, reasoning: "[SIMULATED] no evidence text supplied to inspect" };
     }
-    return overlap
-      ? { verdict: "SUPPORTS", confidence: 0.7, reasoning: "[SIMULATED] claim figures appear in the evidence text within tolerance" }
-      : { verdict: "REJECTS", confidence: 0.65, reasoning: "[SIMULATED] claim figures do not appear to match the evidence text" };
+    const claimNums = extractScaledNumbers(input.claimText);
+    const evidenceNums = extractScaledNumbers(input.evidenceTexts.join(" "));
+    const closeToClaim = (e: number) => claimNums.some((n) => Math.abs(e - n) / Math.max(e, n, 1) < 0.03);
+
+    // Regression (found by the hostile-audit re-run of Scenario B): an
+    // adversarial dispute's evidence bundle legitimately contains
+    // evidence for BOTH sides — the claim's own restated figure is
+    // almost always present alongside the contradicting figure. "does
+    // the claim's number appear ANYWHERE in the bundle" is therefore
+    // not a meaningful signal once a genuinely different figure is also
+    // present: a conflicting number is real evidence of a discrepancy,
+    // and a stub investigator that ignores it in favor of the claim's
+    // own self-restatement isn't investigating anything. Any evidence
+    // number that does NOT match the claim's figure outweighs one that
+    // does.
+    const conflicting = evidenceNums.filter((e) => !closeToClaim(e));
+    const matching = evidenceNums.filter(closeToClaim);
+
+    if (conflicting.length > 0) {
+      return {
+        verdict: "REJECTS",
+        confidence: 0.65,
+        reasoning: `[SIMULATED] evidence cites a figure (${conflicting[0]}) that does not match the claim's figure — a real discrepancy, regardless of whether the claim's own number also appears elsewhere in the bundle`,
+      };
+    }
+    if (matching.length > 0) {
+      return { verdict: "SUPPORTS", confidence: 0.7, reasoning: "[SIMULATED] claim figures appear in the evidence text within tolerance, with no conflicting figure present" };
+    }
+    return { verdict: "REJECTS", confidence: 0.65, reasoning: "[SIMULATED] claim figures do not appear to match the evidence text" };
   }
 
   private finalize(

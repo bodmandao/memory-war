@@ -49,7 +49,15 @@ contract InvestigatorRegistry {
     /// existing investigatorId to record this as an explicit successor
     /// version (spec: "investigator versions... version lineage").
     function register(string calldata modelProvider, bytes32 parentId) external returns (bytes32 investigatorId) {
-        if (parentId != bytes32(0) && !investigators[parentId].exists) revert InvestigatorNotFound(parentId);
+        if (parentId != bytes32(0)) {
+            if (!investigators[parentId].exists) revert InvestigatorNotFound(parentId);
+            // Only the parent identity's own current controller may
+            // register an official successor to it — otherwise anyone
+            // could attach a brand-new identity to someone else's
+            // accumulated reputation lineage by simply naming their
+            // investigatorId as a "parent" they never controlled.
+            if (investigators[parentId].controller != msg.sender) revert NotController(parentId, msg.sender);
+        }
         investigatorId = keccak256(abi.encodePacked(msg.sender, modelProvider, parentId, block.timestamp));
         require(!investigators[investigatorId].exists, "id collision");
         investigators[investigatorId] = Investigator({
@@ -70,6 +78,7 @@ contract InvestigatorRegistry {
         Investigator storage inv = investigators[investigatorId];
         if (!inv.exists) revert InvestigatorNotFound(investigatorId);
         if (inv.controller != msg.sender) revert NotController(investigatorId, msg.sender);
+        require(newController != address(0), "cannot rotate to the zero address");
         address old = inv.controller;
         inv.controller = newController;
         emit ControllerRotated(investigatorId, old, newController, uint64(block.timestamp));

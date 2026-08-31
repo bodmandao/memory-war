@@ -40,7 +40,7 @@ export class ZgStorageAdapter {
   private readonly requestedMode: "auto" | "live" | "local";
 
   constructor(private readonly config: StorageConfig = {}) {
-    this.requestedMode = config.mode ?? (process.env.ZG_STORAGE_MODE as any) ?? "auto";
+    this.requestedMode = config.mode ?? (process.env.OG_STORAGE_MODE as any) ?? "auto";
     this.localDir = config.localDir ?? "./.data/local-storage";
     if (!existsSync(this.localDir)) mkdirSync(this.localDir, { recursive: true });
   }
@@ -50,12 +50,12 @@ export class ZgStorageAdapter {
     if (this.live) return this.live;
     if (this.liveInitError) return null;
 
-    const indexerRpc = this.config.indexerRpc ?? process.env.ZG_STORAGE_INDEXER_RPC;
+    const indexerRpc = this.config.indexerRpc ?? process.env.OG_STORAGE_INDEXER_RPC;
     const chainRpc = this.config.chainRpc ?? process.env.CHAIN_RPC_URL;
     const privateKey = this.config.privateKey ?? process.env.CHAIN_PRIVATE_KEY;
 
     if (!indexerRpc || !chainRpc || !privateKey) {
-      this.liveInitError = "ZG_STORAGE_INDEXER_RPC / CHAIN_RPC_URL / CHAIN_PRIVATE_KEY not fully configured";
+      this.liveInitError = "OG_STORAGE_INDEXER_RPC / CHAIN_RPC_URL / CHAIN_PRIVATE_KEY not fully configured";
       if (this.requestedMode === "live") throw new Error(`0G Storage live mode requested but not configured: ${this.liveInitError}`);
       return null;
     }
@@ -75,7 +75,25 @@ export class ZgStorageAdapter {
     }
   }
 
+  /**
+   * The returned `rootHash` is ALWAYS `contentHashOf(bytes)` — the
+   * protocol's own canonical, storage-backend-independent identifier
+   * (the same hash `Evidence.id`/on-chain `evidenceBundleHash` use) —
+   * regardless of storage mode. It is deliberately never 0G Storage's
+   * own network-internal root hash (a Merkle root over the SDK's
+   * chunked/segmented representation of the file, a genuinely different
+   * value from a flat hash of the raw bytes). That internal identifier
+   * is real and necessary — it's what `indexer.downloadToBlob()`
+   * actually requires — so it's tracked separately (`writeLiveMapping`)
+   * rather than discarded, but it must never leak out as "the" hash: a
+   * caller retrieving content by the protocol's own recorded evidence
+   * hash would otherwise find nothing on the live network, and
+   * `verify()`'s tamper-check would spuriously fail on byte-perfect
+   * content. (Found by actually exercising live mode for the first
+   * time — see docs/AUDIT.md.)
+   */
   async upload(bytes: Uint8Array): Promise<StorageResult> {
+    const contentHash = contentHashOf(bytes);
     const live = await this.getLive();
     if (live) {
       try {
@@ -88,10 +106,16 @@ export class ZgStorageAdapter {
         // monorepo dual-package hazard). Structurally identical at runtime.
         const [tx, uploadErr] = await live.indexer.upload(memData, live.chainRpc, live.signer as unknown as Parameters<typeof live.indexer.upload>[2]);
         if (uploadErr) throw uploadErr;
-        const rootHash = ("rootHash" in tx ? tx.rootHash : tx.rootHashes[0]) as string;
+        const live0gRootHash = ("rootHash" in tx ? tx.rootHash : tx.rootHashes[0]) as string;
         const txHash = "txHash" in tx ? tx.txHash : tx.txHashes[0];
-        this.writeLocalMirror(rootHash as Hash, bytes); // cache locally too, so download() is fast either way
-        return { rootHash: rootHash as Hash, mode: "0G_STORAGE_LIVE", txHash, detail: `uploaded to live 0G Storage indexer` };
+        this.writeLocalMirror(contentHash, bytes); // cache locally too, so download() is fast either way
+        this.writeLiveMapping(contentHash, live0gRootHash);
+        return {
+          rootHash: contentHash,
+          mode: "0G_STORAGE_LIVE",
+          txHash,
+          detail: `uploaded to live 0G Storage indexer (network root ${live0gRootHash})`,
+        };
       } catch (err) {
         if (this.requestedMode === "live") throw err;
         // fall through to local mode, honestly labeled
@@ -113,16 +137,20 @@ export class ZgStorageAdapter {
     };
   }
 
+  /** `rootHash` here is always the protocol's contentHash (see `upload()`) — resolved to 0G's own network root via the persisted mapping before calling the live SDK. */
   async download(rootHash: Hash): Promise<{ bytes: Uint8Array; mode: StorageMode }> {
     const live = await this.getLive();
     if (live) {
-      try {
-        const [blob, err] = await live.indexer.downloadToBlob(rootHash);
-        if (err || !blob) throw err ?? new Error("downloadToBlob returned no data");
-        const bytes = new Uint8Array(await blob.arrayBuffer());
-        return { bytes, mode: "0G_STORAGE_LIVE" };
-      } catch {
-        // fall through to local mirror
+      const live0gRootHash = this.readLiveMapping(rootHash);
+      if (live0gRootHash) {
+        try {
+          const [blob, err] = await live.indexer.downloadToBlob(live0gRootHash);
+          if (err || !blob) throw err ?? new Error("downloadToBlob returned no data");
+          const bytes = new Uint8Array(await blob.arrayBuffer());
+          return { bytes, mode: "0G_STORAGE_LIVE" };
+        } catch {
+          // fall through to local mirror
+        }
       }
     }
     const bytes = this.readLocalMirror(rootHash);
@@ -152,6 +180,32 @@ export class ZgStorageAdapter {
 
   private localFile(rootHash: Hash): string {
     return join(this.localDir, rootHash.replace(/[^a-zA-Z0-9]/g, "") + ".bin");
+  }
+
+  /**
+   * Persists contentHash -> 0G's own network root hash. A plain
+   * in-memory map wouldn't survive across processes (the process that
+   * calls `upload()` — e.g. the demo driver — is routinely a different
+   * process than the one that later calls `download()`/`verify()` —
+   * e.g. the indexer), so this is a small sidecar file next to the
+   * local mirror, keyed the same way.
+   */
+  private writeLiveMapping(contentHash: Hash, live0gRootHash: string) {
+    writeFileSync(this.liveMappingFile(contentHash), JSON.stringify({ live0gRootHash }));
+  }
+
+  private readLiveMapping(contentHash: Hash): string | null {
+    const path = this.liveMappingFile(contentHash);
+    if (!existsSync(path)) return null;
+    try {
+      return JSON.parse(readFileSync(path, "utf8")).live0gRootHash ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private liveMappingFile(contentHash: Hash): string {
+    return join(this.localDir, contentHash.replace(/[^a-zA-Z0-9]/g, "") + ".live.json");
   }
 
   /** For honest UI badges: what mode WOULD an upload run in right now? */

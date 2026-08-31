@@ -16,11 +16,35 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+/**
+ * Every route below drives real transactions from the SAME handful of
+ * shared local-devnet keys (LOCAL_DEVNET_KEYS in lib.ts) — there is no
+ * per-agent wallet in this demo-relayer design (documented in
+ * docs/AUDIT.md). Two genuinely concurrent requests each fetch a
+ * fresh "pending" nonce for the same address and race: one lands, the
+ * other fails with "nonce too low". That failure was always surfaced
+ * honestly (a 500, never a fabricated success) — but it made ordinary
+ * concurrent agent traffic fail needlessly, found by testing exactly
+ * that (kill-test §hostile audit "concurrent requests"). Serializing
+ * writes through one process-wide queue is the smallest fix that
+ * doesn't pretend the shared-key architecture is something it isn't:
+ * a production deployment gives each agent its own wallet instead.
+ */
+let writeQueue: Promise<unknown> = Promise.resolve();
+function serialized<T>(fn: () => Promise<T>): Promise<T> {
+  const result = writeQueue.then(fn, fn);
+  writeQueue = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
 app.post("/run/tamper", async (_req, res) => {
   try {
-    res.json(await runTamperDemo());
+    res.json(await serialized(runTamperDemo));
   } catch (err) {
     res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
   }
@@ -28,7 +52,7 @@ app.post("/run/tamper", async (_req, res) => {
 
 app.post("/run/a", async (_req, res) => {
   try {
-    res.json(await runScenarioA());
+    res.json(await serialized(runScenarioA));
   } catch (err) {
     res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
   }
@@ -36,7 +60,7 @@ app.post("/run/a", async (_req, res) => {
 
 app.post("/run/b", async (_req, res) => {
   try {
-    res.json(await runScenarioB());
+    res.json(await serialized(runScenarioB));
   } catch (err) {
     res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
   }
@@ -44,7 +68,7 @@ app.post("/run/b", async (_req, res) => {
 
 app.post("/run/c", async (_req, res) => {
   try {
-    res.json(await runScenarioC());
+    res.json(await serialized(runScenarioC));
   } catch (err) {
     res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
   }
@@ -61,15 +85,22 @@ app.post("/run/c", async (_req, res) => {
  * own key over HTTP — the honest scope for this build (see
  * docs/AUDIT.md). The economic actions it performs (paying a
  * verification fee, paying investigators) are real on-chain transfers
- * either way.
+ * either way. Requests queue (see `serialized` above) rather than
+ * racing each other's nonces; a failure is always a real HTTP error,
+ * never a fabricated success.
  */
 app.post("/agent/verify-claim", async (req, res) => {
   const body = req.body as Partial<AgentVerifyInput>;
-  if (!body.claim || typeof body.claim !== "string") {
-    return res.status(400).json({ error: "body.claim (string) is required" });
+  if (!body.claim || typeof body.claim !== "string" || body.claim.trim().length === 0) {
+    return res.status(400).json({ error: "body.claim (non-empty string) is required" });
+  }
+  if (body.evidence !== undefined && !Array.isArray(body.evidence)) {
+    return res.status(400).json({ error: "body.evidence, if present, must be an array of strings" });
   }
   try {
-    const result = await agentVerifyClaim({ claim: body.claim, evidence: Array.isArray(body.evidence) ? body.evidence : [], counterClaim: body.counterClaim });
+    const result = await serialized(() =>
+      agentVerifyClaim({ claim: body.claim!, evidence: Array.isArray(body.evidence) ? body.evidence : [], counterClaim: body.counterClaim }),
+    );
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });

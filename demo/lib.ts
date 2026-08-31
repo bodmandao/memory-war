@@ -48,16 +48,42 @@ export interface DemoTrace {
   ok: boolean;
 }
 
+/**
+ * Every call creates a fresh `ZgChainAdapter` (and therefore a fresh
+ * ethers `JsonRpcProvider`) per role, per pipeline. Found by the
+ * hostile-audit concurrency test: a provider that's never `.destroy()`ed
+ * keeps its background block-polling loop running forever, and at a
+ * fast local polling interval (see chain.ts) these accumulate across
+ * requests and visibly degrade later calls. `trackedChains` plus
+ * `destroyTrackedChains()` (called from a `finally` block by every
+ * exported entry point below) is the cleanup this leak needed.
+ */
+const trackedChains: ZgChainAdapter[] = [];
+
+function destroyTrackedChains(): void {
+  for (const chain of trackedChains.splice(0)) {
+    try {
+      chain.provider.destroy();
+    } catch {
+      // best-effort cleanup — a provider that's already gone is not an error
+    }
+  }
+}
+
 async function makeChain(role: keyof typeof LOCAL_DEVNET_KEYS): Promise<ZgChainAdapter> {
   const base = new ZgChainAdapter();
+  trackedChains.push(base);
   const label = await base.networkLabel();
   if (label === "LOCAL_DEVNET") {
-    return await base.connectAs(LOCAL_DEVNET_KEYS[role]);
+    const connected = await base.connectAs(LOCAL_DEVNET_KEYS[role]);
+    trackedChains.push(connected);
+    return connected;
   }
   return base; // testnet/mainnet: single operator key from .env drives every role in this MVP demo
 }
 
 export async function runScenarioA(): Promise<DemoTrace> {
+  try {
   const steps: DemoStep[] = [];
   const storage = new ZgStorageAdapter();
 
@@ -95,9 +121,13 @@ export async function runScenarioA(): Promise<DemoTrace> {
   });
 
   return { scenario: "A: predicate mismatch (no fight)", steps, ok: true };
+  } finally {
+    destroyTrackedChains();
+  }
 }
 
 export async function runScenarioB(): Promise<DemoTrace> {
+  try {
   const steps: DemoStep[] = [];
   const storage = new ZgStorageAdapter();
 
@@ -127,7 +157,7 @@ export async function runScenarioB(): Promise<DemoTrace> {
   const bond = 1_000_000_000_000_000n; // 0.001 native token — deliberately small, spec §10: minimal bonding, no tokenomics
   const openTx = await challengerChain.contract.openChallenge(claimId, 0 /* CONTRADICTION */, { value: bond });
   const openReceipt = await openTx.wait();
-  const opened = openReceipt.logs.map((l: any) => challengerChain.contract.interface.parseLog(l)).find((e: any) => e?.name === "ChallengeOpened");
+  const opened = await findEventInReceipt(challengerChain, openReceipt, challengerChain.contract.interface, "ChallengeOpened");
   const challengeId = opened.args.challengeId as string;
   steps.push({ label: "Bonded CONTRADICTION challenge opened", detail: `challengeId=${challengeId} bond=${bond} wei`, data: { challengeId } });
 
@@ -210,6 +240,9 @@ export async function runScenarioB(): Promise<DemoTrace> {
   });
 
   return { scenario: "B: genuine contradiction (full adversarial lifecycle)", steps, ok: true };
+  } finally {
+    destroyTrackedChains();
+  }
 }
 
 /**
@@ -219,6 +252,7 @@ export async function runScenarioB(): Promise<DemoTrace> {
  * registered identities (spec Priority 2), not bare addresses.
  */
 export async function runScenarioC(): Promise<DemoTrace> {
+  try {
   const steps: DemoStep[] = [];
   const storage = new ZgStorageAdapter();
 
@@ -244,7 +278,7 @@ export async function runScenarioC(): Promise<DemoTrace> {
   const fee = 2_000_000_000_000_000n; // 0.002 native token — the verification fee, paid entirely to investigators (spec Priority 1)
   const reqTx = await agentChain.contract.requestVerification(claimId, { value: fee });
   const reqReceipt = await reqTx.wait();
-  const opened = reqReceipt.logs.map((l: any) => agentChain.contract.interface.parseLog(l)).find((e: any) => e?.name === "ChallengeOpened");
+  const opened = await findEventInReceipt(agentChain, reqReceipt, agentChain.contract.interface, "ChallengeOpened");
   const requestId = opened.args.challengeId as string;
   steps.push({
     label: "Agent pays a verification fee — no adversary, no bond game, just a request",
@@ -332,6 +366,9 @@ export async function runScenarioC(): Promise<DemoTrace> {
   });
 
   return { scenario: "C: pay-per-verification + portable investigator identity", steps, ok: true };
+  } finally {
+    destroyTrackedChains();
+  }
 }
 
 /**
@@ -360,6 +397,7 @@ export interface AgentVerifyResult {
 }
 
 export async function agentVerifyClaim(input: AgentVerifyInput): Promise<AgentVerifyResult> {
+  try {
   const storage = new ZgStorageAdapter();
   const agentChain = await makeChain("challenger");
   const authorChain = await makeChain("author");
@@ -372,8 +410,7 @@ export async function agentVerifyClaim(input: AgentVerifyInput): Promise<AgentVe
   const fee = 2_000_000_000_000_000n;
   const reqTx = await agentChain.contract.requestVerification(claimId, { value: fee });
   const reqReceipt = await reqTx.wait();
-  const requestId = reqReceipt.logs.map((l: any) => agentChain.contract.interface.parseLog(l)).find((e: any) => e?.name === "ChallengeOpened")!.args
-    .challengeId as string;
+  const requestId = (await findEventInReceipt(agentChain, reqReceipt, agentChain.contract.interface, "ChallengeOpened")).args.challengeId as string;
 
   const investigatorAChain = await makeChain("investigatorA");
   const investigatorBChain = await makeChain("investigatorB");
@@ -443,13 +480,16 @@ export async function agentVerifyClaim(input: AgentVerifyInput): Promise<AgentVe
     payment: { feeWei: fee.toString(), payouts },
     history: { claimId, onChainTxHash: resolveTx.hash, queryUrl: `/claims/${claimId}` },
   };
+  } finally {
+    destroyTrackedChains();
+  }
 }
 
 async function registerInvestigatorIdentity(chain: ZgChainAdapter, modelProvider: string): Promise<string> {
   if (!chain.investigatorRegistry) throw new Error("investigatorRegistry not configured on this chain adapter");
   const tx = await chain.investigatorRegistry.register(modelProvider, "0x" + "0".repeat(64));
   const receipt = await tx.wait();
-  const event = receipt.logs.map((l: any) => chain.investigatorRegistry!.interface.parseLog(l)).find((e: any) => e?.name === "InvestigatorRegistered");
+  const event = await findEventInReceipt(chain, receipt, chain.investigatorRegistry.interface, "InvestigatorRegistered");
   return event.args.investigatorId as string;
 }
 
@@ -497,10 +537,56 @@ function nowSec() {
   return Math.floor(Date.now() / 1000);
 }
 
+/**
+ * A real, transient RPC race, observed against 0G mainnet's own public
+ * endpoint (see docs/AUDIT.md): `tx.wait()` can return a receipt whose
+ * own logs aren't yet fully indexed by the node that served it —
+ * confirmed by directly re-querying `eth_getTransactionReceipt` for the
+ * same hash a couple of seconds later and getting the complete, correct
+ * logs (the RPC's own error text for a related query: "no matching
+ * receipts found: this may indicate potential data corruption").
+ * Hardhat's local devnet never exhibits this (instant automining, no
+ * indexing lag), which is why it was invisible until this pass actually
+ * ran against real mainnet infrastructure. Retries a bounded number of
+ * times before failing loudly — a genuine transaction failure (the
+ * event never appears) still surfaces as a clear error, never a silent
+ * false success.
+ */
+async function findEventInReceipt(
+  chain: ZgChainAdapter,
+  receipt: { hash: string; logs: readonly any[] },
+  iface: { parseLog(l: any): any },
+  eventName: string,
+  retries = 5,
+  delayMs = 1500,
+): Promise<any> {
+  let logs = receipt.logs;
+  for (let attempt = 0; ; attempt++) {
+    const event = logs
+      .map((l: any) => {
+        try {
+          return iface.parseLog(l);
+        } catch {
+          return null;
+        }
+      })
+      .find((e: any) => e?.name === eventName);
+    if (event) return event;
+    if (attempt >= retries) {
+      throw new Error(
+        `Event "${eventName}" not found in receipt for tx ${receipt.hash} after ${retries + 1} attempts — this may be a genuine transaction failure, not just an indexing lag.`,
+      );
+    }
+    await new Promise((res) => setTimeout(res, delayMs));
+    const fresh = await chain.provider.getTransactionReceipt(receipt.hash);
+    if (fresh) logs = fresh.logs;
+  }
+}
+
 async function createClaimOnChain(chain: ZgChainAdapter, predicateHash: Hash, textHash: Hash, predicate: unknown): Promise<string> {
   const tx = await chain.contract.createClaim(predicateHash, textHash, nowSec());
   const receipt = await tx.wait();
-  const event = receipt.logs.map((l: any) => chain.contract.interface.parseLog(l)).find((e: any) => e?.name === "ClaimCreated");
+  const event = await findEventInReceipt(chain, receipt, chain.contract.interface, "ClaimCreated");
   return event.args.claimId as string;
 }
 

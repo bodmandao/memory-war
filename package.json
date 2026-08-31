@@ -12,7 +12,7 @@
     "build": "npm run build --workspace=packages/protocol-core --workspace=packages/zg-adapters",
     "test": "npm run test --workspace=packages/protocol-core --workspace=packages/zg-adapters",
     "test:contracts": "npm run test --workspace=contracts",
-    "typecheck": "npm run typecheck --workspace=packages/protocol-core --workspace=packages/zg-adapters --workspace=apps/indexer",
+    "typecheck": "npm run typecheck --workspace=packages/protocol-core --workspace=packages/zg-adapters --workspace=apps/indexer --workspace=apps/client",
     "demo:tamper": "tsx demo/tamper-demo.ts",
     "demo:a": "tsx demo/scenario-a.ts",
     "demo:b": "tsx demo/scenario-b.ts",
@@ -21,8 +21,11 @@
     "demo:server": "tsx demo/server.ts",
     "chain:node": "npm run node --workspace=contracts",
     "chain:deploy:local": "npm run deploy:local --workspace=contracts",
+    "chain:deploy:testnet": "npm run deploy:testnet --workspace=contracts",
+    "chain:deploy:mainnet": "npm run deploy:mainnet --workspace=contracts",
     "indexer:dev": "npm run dev --workspace=apps/indexer",
-    "web:dev": "npm run dev --workspace=apps/web"
+    "client:dev": "npm run dev --workspace=apps/client",
+    "client:build": "npm run build --workspace=apps/client"
   },
   "dependencies": {
     "@memory-war/protocol-core": "0.1.0",

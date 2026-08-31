@@ -32,6 +32,23 @@ describe("ZgComputeInvestigator (local mode, no API keys — the SIMULATED floor
     expect(report.verdict).toBe("SUPPORTS");
   });
 
+  it("rejects a claim when the bundle contains BOTH the claim's own restated figure AND a conflicting one (regression: an adversarial dispute's evidence legitimately restates the original claim alongside the contradiction — that must not flip the verdict to SUPPORTS)", async () => {
+    const investigator = new ZgComputeInvestigator("simulated-provider-e", { mode: "local" });
+    const report = await investigator.investigate({
+      claimId: h("claim"),
+      challengeId: h("challenge"),
+      claimText: "Protocol X raised $40M",
+      counterClaimText: "Protocol X raised $12M",
+      evidenceTexts: [
+        "Official announcement: Protocol X closed a $40,000,000 Series A led by Acme Capital.",
+        "On-chain treasury inflow record: $12,000,000 received in the funding transaction.",
+      ],
+      evidenceBundleHash: hashUtf8("bundle"),
+      investigatorId: "0x5555555555555555555555555555555555555555",
+    });
+    expect(report.verdict).toBe("REJECTS");
+  });
+
   it("rejects the claim when the evidence contradicts the figure", async () => {
     const investigator = new ZgComputeInvestigator("simulated-provider-b", { mode: "local" });
     const report = await investigator.investigate({

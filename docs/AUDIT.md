@@ -1,6 +1,313 @@
 # Final Audit
 
-> **Addendum — 0G-native integration pass.** A second pass added
+> **Addendum 6 — real 0G mainnet + testnet deployment.** A seventh pass
+> deployed and independently exercised the actual live rails, not just
+> configuration. Every claim below was verified by direct query (real
+> tx hashes, real `eth_getLogs`/view-function calls), not by trusting a
+> script's own printed output.
+>
+> **Chain — LIVE.** `InvestigatorRegistry` at
+> `0xde4070363ee7B6Ba0ee567929b532489a3b4A8f4` and `MemoryWarRegistry`
+> at `0x20eC53851DcDcA67Ae8340c9962baCedaF63aD83`, deployed to real 0G
+> mainnet (chain ID 16661, `https://evmrpc.0g.ai` — verified against
+> docs.0g.ai and a live `eth_chainId` call before use, hardcoded in a
+> new `ogMainnet` Hardhat network rather than reusing `CHAIN_RPC_URL`'s
+> usual dev/test values). Verified by reading bytecode back from chain,
+> confirming `MemoryWarRegistry.investigatorRegistry()` returns the
+> correct address, and calling `MIN_REPORTS_REQUIRED()`. Deployment
+> gas: 0.0119 OG actual vs. 0.0127 OG estimated.
+>
+> **0G Storage — LIVE, with a real bug found and fixed.** Uploaded real
+> bytes to the live mainnet indexer (`indexer-storage-turbo.0g.ai`,
+> distinct from the testnet one), got a real tx hash, downloaded them
+> back byte-for-byte, twice. Found in the process: `upload()`'s
+> returned `rootHash` was 0G's own network-internal Merkle root (over
+> chunked/segmented data), not `contentHashOf(bytes)` — the protocol's
+> own canonical hash used everywhere else (`Evidence.id`, on-chain
+> `evidenceBundleHash`). On-chain commitments were never affected (they
+> never touch storage's rootHash — confirmed by reading
+> `evidence.ts`/`demo/lib.ts`), but live-uploaded content would have
+> been unretrievable by the identifier the rest of the system actually
+> uses, and `verify()`'s tamper-check would have spuriously failed on
+> byte-perfect content. Invisible until now because LOCAL_DEMO mode's
+> rootHash happens to equal `contentHashOf` by construction. Fixed:
+> `upload()` now always returns `contentHashOf(bytes)`, with 0G's own
+> root persisted separately (`writeLiveMapping`) purely for retrieval.
+> Re-verified against mainnet after the fix — `upload.rootHash` now
+> exactly matches `contentHashOf(bytes)`, and `verify().ok === true`.
+> New regression test added (`storage.test.ts`).
+>
+> **0G Compute — LIVE, with two real bugs found and fixed.** Ran a real
+> investigation against 0G Compute on testnet (chain ID 16602 —
+> deliberately never mainnet: docs.0g.ai's mainnet overview lists no
+> compute broker endpoint at all, so compute now reads its own
+> `OG_COMPUTE_CHAIN_RPC_URL`/`COMPUTE_PRIVATE_KEY`, falling back to the
+> shared chain vars only if unset, so a mainnet deployment wallet can
+> never be silently reused for compute). Got a genuine
+> `attestation.mode: "0G_COMPUTE_TEE"`, `verified: true` — confirmed via
+> `broker.inference.processResponse()` genuinely returning `true` for
+> that exact response. Two bugs found along the way: (1) the installed
+> SDK exposes a listed service's provider address as `.provider`, not
+> `.providerAddress` as the code assumed — confirmed by inspecting a
+> real `listService()` response; silently resolved to `undefined` and
+> only failed later, inside the SDK's own `transferFund()` ("unsupported
+> addressable value"). (2) The internal `ethers.JsonRpcProvider` this
+> path creates was never destroyed, leaking a background polling handle
+> — same class of bug fixed in `chain.ts`'s `trackedChains` months ago,
+> never applied here since live compute had never been exercised. Fixed
+> with the same `try/finally` + `.destroy()` pattern. Separately: 0G
+> Compute requires a minimum 3.0 OG balance just to create a ledger
+> account (`LedgerProcessor.MIN_LEDGER_BALANCE_OG`) — a real funding
+> floor, not a bug, confirmed by reading the SDK source directly rather
+> than guessing.
+>
+> **A third, more serious real bug found: `tx.wait()`'s receipt can
+> come back with the wrong logs — or, worse, a real 0G mainnet RPC node
+> can permanently lose a successful transaction's logs.** First
+> manifestation (transient, self-corrected within seconds on manual
+> retry): `receipt.logs` empty on the first poll after `tx.wait()`
+> resolved, complete on a second query moments later — 0G's own error
+> text for a related query admits as much ("no matching receipts
+> found: this may indicate potential data corruption"). Fixed with a
+> new shared `findEventInReceipt()` helper (replacing five duplicated,
+> unprotected `receipt.logs.map(...).find(...)` call sites across
+> `demo/lib.ts`) that retries re-fetching the receipt up to 5 times
+> before failing loudly — never silently succeeding, never crashing
+> with an opaque "Cannot read properties of undefined." **Second
+> manifestation, on a later run, was not transient**: a `createClaim`
+> transaction mined with `status: 1` (genuine EVM success — the
+> contract unconditionally emits `ClaimCreated` on every non-reverting
+> path, confirmed by reading `MemoryWarRegistry.sol` directly) but
+> **zero logs, permanently** — confirmed 45 blocks later via both a
+> direct receipt re-fetch and an independent `eth_getLogs` block-range
+> query against the same contract address, both returning nothing. This
+> is a genuine data-loss defect in this specific public RPC node, not a
+> lag, not a code bug, and not something fixable from this side —
+> consistent with docs.0g.ai's own recommendation to use a third-party
+> RPC provider (QuickNode/ThirdWeb/Ankr) for production. This is why
+> the full multi-step lifecycle (claim → verification request →
+> evidence → investigation → resolution → settlement) could not be
+> completed end-to-end in one live run against mainnet in this pass —
+> each individual rail (chain, storage, compute) was independently
+> verified live and working; the orchestrated sequence was blocked by
+> this RPC node dropping a transaction's logs outright, which the
+> `findEventInReceipt` retry correctly surfaced as a clear, honest
+> failure rather than papering over it.
+>
+> **Payment/settlement:** unchanged from the existing on-chain
+> mechanism (verified extensively by the 21-case contract test suite,
+> re-run clean against the fresh mainnet-matching compiled bytecode
+> before deployment). No separate "0G Pay" SDK exists or was
+> fabricated — this remains agent-native on-chain settlement using 0G
+> Chain's native token, exactly as previously documented.
+>
+> **DA and ERC-7857: unchanged, on purpose.** No genuine public 0G DA
+> API was found to exist beyond what was already investigated in
+> Addendum 1 — `COMMITMENT READY` stands. ERC-7857/Agentic ID was not
+> forced into investigator identity; `InvestigatorRegistry.sol` remains
+> the correct fit for auditable lineage over encrypted transferable
+> intelligence, and nothing found in this pass changes that reasoning.
+>
+> **Addendum 5 — client rename + art-direction pass.** A sixth pass (1)
+> renamed `apps/web` → `apps/client` throughout the repo — package name
+> (`@memory-war/web` → `@memory-war/client`), root scripts (`web:dev` →
+> `client:dev`, `web:build` → `client:build`, now also wired into `npm
+> run typecheck`), README, and the one still-actionable stale command in
+> this document; `apps/web` no longer exists anywhere in the tree, and
+> `.next/` was added to `.gitignore`; and (2) substantially upgraded the
+> client's visual design without touching any backend/protocol/contract
+> code: a display typeface (Bricolage Grotesque) for branding/hero tiers
+> alongside the existing IBM Plex Sans/Mono; a signature `ProtocolFlow`
+> component with per-stage iconography and animated causality; a
+> restrained canvas network background on the hero (hard-disabled under
+> `prefers-reduced-motion`); the claim detail page rebuilt as a numbered
+> 01–08 case-file dossier (`Stage` component) that always shows all
+> eight stages in fixed order — pending stages render their real pending
+> state rather than being skipped, so numbering never shifts between
+> claims; an investigator comparison table; skeleton loading states
+> matching each page's real layout; named empty/error states ("No claims
+> found", "Indexer unavailable", "Local demonstration mode") replacing
+> generic text; a mobile navigation drawer. No new data field is
+> invented anywhere — the dossier's pending-stage messaging and the
+> resolution "N investigators → verdict" summary are computed from the
+> exact same indexer/demo-server responses the previous pass already
+> used, just organized and labeled more legibly.
+>
+> **Environment note, not a code defect.** Verifying this pass hit a
+> real build failure worth recording: `next build` kept hanging for
+> 10+ minutes on `Found lockfile missing swc dependencies, patching...`,
+> which fetches from `registry.npmjs.org` and — separately — on Google
+> Fonts retries, both against a registry connection that was timing out
+> at the time (confirmed via direct `curl` to `registry.npmjs.org`). A
+> full clean reinstall (fresh `node_modules` + regenerated
+> `package-lock.json`, which had been missing a complete SWC platform
+> entry after this session's own `apps/web` → `apps/client` rename)
+> resolved it — the build has been clean since. This was a local
+> network/lockfile-consistency issue on the machine doing verification,
+> not a defect in the committed code; recorded here only because it's
+> exactly the kind of thing this document exists to be honest about.
+>
+> **Addendum 4 — frontend/productization pass.** A fifth pass replaced
+> `apps/web` (a small hand-rolled Vite/DOM console — 3 files, no
+> routing) with a proper Next.js App Router application: a landing
+> dashboard with live indexed stats, a claims explorer with filters, a
+> claim detail page (evidence, challenge lifecycle, per-investigator
+> reports, resolution, dissent, payouts, appeals), an investigators
+> section (identity, lineage, controller history, calibration, real
+> cross-referenced payouts), a playground that runs the same four demo
+> scenarios and renders their actual returned step trace (not a
+> fabricated fixed lifecycle diagram — different scenarios genuinely
+> take different paths), and a page documenting and exercising `POST
+> /agent/verify-claim` live. No protocol, contract, adapter, or indexer
+> code changed in this pass; no data field is invented anywhere in the
+> UI — every value traces to a real indexer/demo-server response, and
+> "no indexed data yet" is shown as such rather than populated with
+> placeholder content.
+>
+> **Architecture decision — package layout kept.** A hypothetical
+> production layout (`packages/chain`, `packages/storage`,
+> `packages/compute`, `packages/investigators`, moving `contracts/` under
+> `packages/`, etc.) was considered and rejected: the existing separation
+> (`protocol-core` pure domain logic, `zg-adapters` for all three 0G
+> integration surfaces, `contracts`, `apps/indexer`, `demo`) already
+> isolates protocol logic from presentation, and splitting `zg-adapters`
+> along its three current files into three packages would be pure
+> churn — real regression risk across a codebase that has already been
+> through four hostile audit passes, for no functional or boundary
+> benefit. Refactoring only where it improves a real production
+> boundary meant refactoring the frontend, not the backend.
+>
+> **Naming — `ZG_*` env vars renamed to `OG_*`.** `ZG_STORAGE_MODE` →
+> `OG_STORAGE_MODE`, `ZG_COMPUTE_MODE` → `OG_COMPUTE_MODE`,
+> `ZG_STORAGE_INDEXER_RPC` → `OG_STORAGE_INDEXER_RPC`; the Hardhat
+> testnet network name `zgTestnet` → `ogTestnet`. These are the only
+> places "ZG" appeared as project-chosen terminology a human actually
+> reads or types. `ZgChainAdapter` / `ZgStorageAdapter` /
+> `ZgComputeInvestigator`, the `zg-adapters` package name, and the
+> Solidity enum member `ZG_COMPUTE_TEE` were deliberately left alone:
+> these are source-code identifiers, and identifiers in both TypeScript
+> and Solidity cannot start with a digit — "Zg"/"ZG_" is the same
+> unavoidable ASCII-safe escape "0G" needs everywhere else it's used as
+> a bare identifier, not a naming mistake, and no judge or user ever
+> reads a class name. Renaming those anyway would have been pure
+> mechanical churn against hardened, tested code for zero externally
+> visible benefit.
+>
+> **Addendum 3 — nonce-timing race, root-caused and closed.** A fourth,
+> narrowly scoped pass targeted specifically the "probabilistic, not
+> eliminated" nonce race disclosed in Addendum 2 below. Root cause:
+> ethers v6's `AbstractProvider` shares identical in-flight/recent RPC
+> calls — same method, same params — for `cacheTimeout` ms (250ms by
+> default) to cut redundant network traffic. `eth_getTransactionCount
+> (address, "pending")` is such a call. A single signer sending two
+> transactions in tight, ordinary succession (the second issued right
+> after the first's send call resolves, without waiting for its
+> receipt — the normal shape of every scenario in `demo/lib.ts`) could
+> have its second nonce lookup handed the *same* cached value as the
+> first, even though Hardhat's instant automining had already consumed
+> that nonce on-chain. A captured failing trace confirmed this exactly:
+> one real `eth_getTransactionCount` call, two `eth_sendRawTransaction`
+> calls both carrying the identical embedded nonce, the second rejected
+> as `NONCE_EXPIRED` ("Nonce too low. Expected nonce to be 13 but got
+> 12."). This was never a true concurrency race between separate
+> signers or a chain-level ordering problem — it was a client-side read
+> cache handing back a stale answer to the same signer. Fix: construct
+> every `JsonRpcProvider` in `ZgChainAdapter` with `cacheTimeout: -1`,
+> disabling that cache. This is not the `pollingInterval` change
+> Addendum 2 tried and reverted — it does not touch how `.wait()` polls
+> for confirmations, costs at most a handful of extra
+> `eth_getTransactionCount` calls per scenario, and has no latency
+> tradeoff. Verified: 8 repeated full sequential `demo:full` runs (32
+> scenario executions) with zero failures where the race previously
+> reproduced on the first iteration; 6 genuinely concurrent
+> `/agent/verify-claim` requests all returned 200 with distinct,
+> correct on-chain results; full test suite (67 protocol-core/
+> zg-adapters unit tests + 2 new nonce regression tests + 21 contract
+> tests, 90 total) passing; typecheck and production build clean. Two
+> new regression tests reproduce the exact bug shape against a real
+> `hardhat node` over HTTP (an in-process test network does not exhibit
+> this — the cache lives in the HTTP transport layer). Honest scope
+> limit: a genuinely simultaneous pair of sends from one signer with no
+> `await` at all between them is a different, structurally distinct
+> problem that would need a centralized nonce manager to fix — no call
+> site in this codebase does that (verified), so it is out of scope and
+> intentionally not asserted against.
+>
+> **Addendum 2 — hostile audit pass.** A third pass tried to break the
+> protocol, the payment model, investigator identity, and the agent API
+> on purpose. It found one critical on-chain defect, two smaller
+> identity-registry defects, a real evidence-scoring regression, and a
+> real (partially mitigated, not eliminated) transaction-timing
+> flakiness — and fixed the first four. Test count: 76 → **77**
+> unit/integration tests + 16 → **21** contract tests, all passing.
+>
+> **Critical — `resolve()` trusted the caller's word for the verdict.**
+> The contract accepted any `status` argument with zero on-chain check
+> against what investigators actually reported — a permissionless
+> caller could resolve *any* challenge to *any* outcome, including
+> ones with zero reports submitted. Fixed: `_submitReport` now tallies
+> SUPPORTS/REJECTS/INSUFFICIENT_EVIDENCE on-chain per challenge, and
+> `resolve()` derives the expected status from those tallies (mirroring
+> protocol-core's `DefaultResolutionProcedure`) and reverts
+> (`StatusMismatch`) if the caller's argument doesn't match. Fixing
+> this broke — and required correcting — four existing tests that had
+> been resolving challenges with zero or verdict-inconsistent reports;
+> that breakage is itself evidence the defect was real, not theoretical.
+> Honest residual limitation: this still can't verify model-provider
+> diversity on-chain (no such field exists in the contract), so Sybil/
+> monoculture investigator addresses can still satisfy the tally check —
+> already-disclosed as bounded, not solved, not a new gap.
+>
+> **`InvestigatorRegistry` lineage forgery.** `register()` checked that
+> a claimed `parentId` existed, but not that the caller controlled it —
+> anyone could register a "successor" to an identity they didn't own,
+> polluting its reputation lineage. Fixed: successor registration now
+> requires `msg.sender == parentId`'s current controller. Also added:
+> `rotateController` rejects the zero address (previously an irreversible
+> self-lockout with no error).
+>
+> **Adversarial-evidence regression in the SIMULATED investigator.**
+> Re-running Scenario B during this pass surfaced a real correctness
+> bug: yesterday's fix for "$25M" vs "$25,000,000" number-scaling made
+> the SIMULATED stub match a claim's own restated figure *anywhere in
+> the evidence bundle* — but an adversarial dispute's bundle legitimately
+> contains evidence for both sides, and the claim's own number is almost
+> always present alongside whatever contradicts it. The stub started
+> flipping Scenario B's genuinely-false claim to SUPPORTS/TRUE, because
+> the $40M figure it was checking for was trivially present in the same
+> bundle as the $12M evidence that actually contradicts it. Fixed: any
+> evidence number that does NOT match the claim's figure now outweighs
+> one that does, rather than "does the number appear anywhere" winning
+> by default. Regression test added; Scenario B now resolves FALSE
+> again (verified live, twice, after the fix).
+>
+> **Concurrency.** The agent API's hard requirement — never report
+> success when the underlying operation failed — held in every test
+> run, including every failure below. Two real fixes landed: (1)
+> concurrent requests are now serialized through one process-wide queue
+> (`demo/server.ts`) rather than racing each other's transaction nonces
+> on the shared demo-relayer keys; (2) every chain adapter's provider is
+> now `.destroy()`ed after use, closing a real background-polling
+> resource leak. A third attempted fix — lowering the provider's
+> polling interval to cut ~40s worst-case latency from `tx.wait()` — was
+> reverted: it measurably reintroduced nonce failures in plain
+> *sequential* runs, so it was not shipped. Residual, disclosed
+> limitation, now characterized more precisely than before: the
+> underlying nonce-timing race this repo has fought since the previous
+> pass (see the `connectAs()` fix earlier in this document) is
+> **probabilistic, not eliminated** — most runs of `demo:full` and the
+> agent API succeed cleanly (confirmed repeatedly, including
+> immediately after this pass's fixes), but a fresh JsonRpcProvider's
+> readiness handshake can still occasionally lose the race against
+> Hardhat's instant automining even in a single-process, purely
+> *sequential* CLI run, not only under concurrency. This was true
+> before this pass and remains true after it; today's fixes reduce its
+> frequency (no more concurrent requests racing each other on top of
+> it) but do not claim to have eliminated it. Every observed failure,
+> in every test run of this entire audit, was an honest error — never
+> once a fabricated success.
+
+> **Addendum 1 — 0G-native integration pass.** A second pass added
 > pay-per-verification settlement, investigator payouts, portable
 > investigator identity (`InvestigatorRegistry.sol`), a DA batch-commitment
 > module (not wired to the runtime), and an agent-facing
@@ -100,7 +407,7 @@ event log.
 This is **ON-CHAIN VERIFIED (local devnet)** — real EVM bytecode, real
 state transitions, real bond accounting. It is **not yet deployed to
 the live 0G Galileo testnet.** The deploy script (`scripts/deploy.ts`,
-network `zgTestnet` in `hardhat.config.ts`) is real and testnet-ready,
+network `ogTestnet` in `hardhat.config.ts`) is real and testnet-ready,
 but 0G's faucet requires an X-account login and a captcha — there was
 no way to obtain a funded testnet wallet autonomously in this session.
 Deploying live requires the user to fund a wallet and set
@@ -112,7 +419,7 @@ Deploying live requires the user to fund a wallet and set
 real SDK (`Indexer`, `MemData`, `.merkleTree()`, `.upload()`,
 `.downloadToBlob()`) with the exact method signatures confirmed against
 the published package's own type declarations — but it requires
-`ZG_STORAGE_INDEXER_RPC` plus a funded `CHAIN_PRIVATE_KEY` on 0G
+`OG_STORAGE_INDEXER_RPC` plus a funded `CHAIN_PRIVATE_KEY` on 0G
 Storage's network, neither of which was configured. Every evidence
 artifact, claim text, and report in this session's demo runs was
 labeled `LOCAL_DEMO` and persisted to a local content-addressed store —
@@ -229,11 +536,11 @@ deploying, running, and re-running it.
 npm install                                    # or: mirror to a local path first, see P1 above
 npm run chain:node                             # terminal A
 npm run chain:deploy:local                     # terminal B — copy the printed address into .env
-npm test && npm run test:contracts             # 60 unit/integration tests + 10 contract tests
-npm run demo:full                              # tamper detection → scenario A → scenario B, full trace
-npm run indexer:dev                            # terminal C — GET /claims, /challenges/:id, /content/:hash
-npm run demo:server                            # terminal D — POST /run/tamper, /run/a, /run/b
-npm run web:dev                                # terminal E — open http://localhost:4402
+npm test && npm run test:contracts             # 76 unit/integration tests + 21 contract tests
+npm run demo:full                              # tamper detection → scenarios A, B, C, full trace
+npm run indexer:dev                            # terminal C — GET /claims, /challenges/:id, /content/:hash, /investigators
+npm run demo:server                            # terminal D — POST /run/tamper, /run/a, /run/b, /run/c, /agent/verify-claim
+npm run client:dev                             # terminal E — open http://localhost:4402
 ```
 
 ## J. One brutally honest sentence

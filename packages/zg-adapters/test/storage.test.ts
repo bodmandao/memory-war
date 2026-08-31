@@ -48,4 +48,30 @@ describe("ZgStorageAdapter (local mode — no network dependency)", () => {
     expect(after.ok).toBe(false);
     expect(after.recomputedHash).not.toBe(rootHash);
   });
+
+  /**
+   * Regression for a real bug found by first exercising live 0G Storage
+   * on mainnet (see docs/AUDIT.md): 0G's own network root hash (a
+   * Merkle root over chunked/segmented data) is NOT the same value as
+   * contentHashOf(bytes) — the protocol's own canonical identifier,
+   * used everywhere else (Evidence.id, on-chain evidenceBundleHash).
+   * upload() must always return the protocol's hash as `rootHash`, and
+   * verify() must succeed against it, even when a live network root
+   * exists and differs. This simulates that split without a live SDK
+   * call, using the adapter's own persisted mapping mechanism directly.
+   */
+  it("verify() succeeds against the protocol's own content hash even when a different live-network root hash is recorded for the same content", async () => {
+    const bytes = new TextEncoder().encode("Protocol X raised $40,000,000");
+    const { rootHash: contentHash } = await adapter.upload(bytes);
+
+    // Simulate what a live upload additionally records: 0G's own,
+    // genuinely different, network-internal root hash for the same bytes.
+    const fakeLive0gRootHash = "0x" + "ab".repeat(32);
+    expect(fakeLive0gRootHash).not.toBe(contentHash);
+    (adapter as unknown as { writeLiveMapping(h: string, r: string): void }).writeLiveMapping(contentHash, fakeLive0gRootHash);
+
+    const result = await adapter.verify(contentHash);
+    expect(result.ok).toBe(true);
+    expect(result.recomputedHash).toBe(contentHash);
+  });
 });

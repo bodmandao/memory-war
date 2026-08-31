@@ -146,6 +146,17 @@ contract MemoryWarRegistry {
     mapping(bytes32 => uint256) public reportCount;
     mapping(bytes32 => address[]) public investigatorsOf; // challengeId => investigator addresses who reported, for fee payout
 
+    // On-chain tallies of submitted verdicts (0=INSUFFICIENT_EVIDENCE,
+    // 1=SUPPORTS, 2=REJECTS — the same convention protocol-core's Report
+    // type and resolution.ts already use). Added specifically so
+    // resolve() below can enforce that its `status` argument is the one
+    // the disclosed mechanical procedure actually produces from what was
+    // submitted, rather than trusting the caller's word for it.
+    mapping(bytes32 => uint256) public supportsCount;
+    mapping(bytes32 => uint256) public rejectsCount;
+    mapping(bytes32 => uint256) public insufficientCount;
+    uint256 public constant MIN_REPORTS_REQUIRED = 2;
+
     uint256 public appealCount;
     mapping(uint256 => AppealRecord) public appeals;
 
@@ -191,6 +202,7 @@ contract MemoryWarRegistry {
     error DuplicateReport(address investigator, bytes32 challengeId);
     error NotContradiction();
     error NotInvestigatorController(bytes32 investigatorId, address caller);
+    error StatusMismatch(bytes32 challengeId, uint8 expected, uint8 got);
 
     constructor(address _investigatorRegistry) {
         investigatorRegistry = IInvestigatorRegistry(_investigatorRegistry);
@@ -375,12 +387,40 @@ contract MemoryWarRegistry {
         if (!c.exists) revert ChallengeNotFound(challengeId);
         if (c.state != ChallengeState.INVESTIGATING) revert IllegalTransition("challenge", uint8(c.state), uint8(c.state));
         if (hasReported[challengeId][msg.sender]) revert DuplicateReport(msg.sender, challengeId);
+        require(verdict <= 2, "invalid verdict");
 
         hasReported[challengeId][msg.sender] = true;
         reportCount[challengeId] += 1;
         investigatorsOf[challengeId].push(msg.sender);
+        if (verdict == 1) supportsCount[challengeId] += 1;
+        else if (verdict == 2) rejectsCount[challengeId] += 1;
+        else insufficientCount[challengeId] += 1;
 
         emit ReportSubmitted(challengeId, msg.sender, evidenceBundleHash, reportCommitment, verdict, attestationMode, attestationVerified, uint64(block.timestamp));
+    }
+
+    /// @dev The disclosed mechanical procedure (protocol-core's
+    /// DefaultResolutionProcedure), re-derived on-chain from the tallies
+    /// above: fewer than MIN_REPORTS_REQUIRED reports, or all of them
+    /// INSUFFICIENT_EVIDENCE, resolves INCONCLUSIVE; unanimous SUPPORTS
+    /// or unanimous REJECTS resolve TRUE_/FALSE_; anything else — any
+    /// disagreement — resolves CONTESTED. This is the ONE thing resolve()
+    /// no longer trusts the caller's word for.
+    ///
+    /// Honest limitation: this reproduces the tally logic, not the
+    /// model-diversity requirement protocol-core's off-chain procedure
+    /// also enforces (>= 2 distinct model providers) — the contract has
+    /// no on-chain notion of "model provider" to check. Sybil/monocult
+    /// investigator addresses can still satisfy this on-chain check; see
+    /// docs/AUDIT.md for why that risk was always disclosed as bounded,
+    /// not solved, rather than hidden.
+    function _expectedStatus(bytes32 challengeId) private view returns (VerdictStatus) {
+        uint256 total = reportCount[challengeId];
+        if (total < MIN_REPORTS_REQUIRED) return VerdictStatus.INCONCLUSIVE;
+        if (insufficientCount[challengeId] == total) return VerdictStatus.INCONCLUSIVE;
+        if (supportsCount[challengeId] == total) return VerdictStatus.TRUE_;
+        if (rejectsCount[challengeId] == total) return VerdictStatus.FALSE_;
+        return VerdictStatus.CONTESTED;
     }
 
     /// @notice Permissionless settlement — anyone may call once the
@@ -402,6 +442,8 @@ contract MemoryWarRegistry {
         if (c.state != ChallengeState.INVESTIGATING) revert IllegalTransition("challenge", uint8(c.state), uint8(ChallengeState.RESOLVED));
         if (block.timestamp < c.windowCloseAt) revert WindowNotClosed(c.windowCloseAt, uint64(block.timestamp));
         require(status != VerdictStatus.NONE, "must resolve to a real status");
+        VerdictStatus expected = _expectedStatus(challengeId);
+        if (status != expected) revert StatusMismatch(challengeId, uint8(expected), uint8(status));
 
         c.state = ChallengeState.RESOLVED;
         ClaimRecord storage claim = claims[c.claimId];

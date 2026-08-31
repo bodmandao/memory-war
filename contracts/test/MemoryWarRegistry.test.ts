@@ -84,10 +84,11 @@ describe("MemoryWarRegistry", () => {
     const challengeId = await openChallenge(registry, challenger, claimId);
     await registry.lockEvidence(challengeId, h("evidence-root"));
     await registry.beginInvestigation(challengeId);
-    await registry.connect(investigatorA).submitReport(challengeId, h("bundle"), h("report-a"), 1, 0, true);
-    await registry.connect(investigatorB).submitReport(challengeId, h("bundle"), h("report-b"), 1, 0, true);
+    // both REJECT — unanimous rejection is what legitimately resolves FALSE_ below (§ StatusMismatch)
+    await registry.connect(investigatorA).submitReport(challengeId, h("bundle"), h("report-a"), 2, 0, true);
+    await registry.connect(investigatorB).submitReport(challengeId, h("bundle"), h("report-b"), 2, 0, true);
 
-    await expect(registry.resolve(challengeId, 1, h("proc"), h("reports"), h("dissent"))).to.be.revertedWithCustomError(registry, "WindowNotClosed");
+    await expect(registry.resolve(challengeId, 2, h("proc"), h("reports"), h("dissent"))).to.be.revertedWithCustomError(registry, "WindowNotClosed");
 
     await time.increase(2 * 60 + 1);
     await expect(registry.resolve(challengeId, 2 /* FALSE_ */, h("proc"), h("reports"), h("dissent"))).to.emit(registry, "Resolved");
@@ -110,13 +111,18 @@ describe("MemoryWarRegistry", () => {
   });
 
   it("refunds the challenger's bond when the claim is found FALSE, and forfeits it when found TRUE", async () => {
-    const { registry, author, challenger } = await deploy();
+    const { registry, author, challenger, investigatorA, investigatorB } = await deploy();
 
     // Case 1: claim ends up FALSE — challenger was right, bond refunded.
+    // Requires two unanimous REJECTS reports — resolve() now derives the
+    // status from what was actually submitted, it no longer takes the
+    // caller's word for it (see StatusMismatch).
     const claimA = await createClaim(registry, author, "A");
     const challengeA = await openChallenge(registry, challenger, claimA, ethers.parseEther("1"));
     await registry.lockEvidence(challengeA, h("root-a"));
     await registry.beginInvestigation(challengeA);
+    await registry.connect(investigatorA).submitReport(challengeA, h("bundle-a"), h("report-a1"), 2, 0, true);
+    await registry.connect(investigatorB).submitReport(challengeA, h("bundle-a"), h("report-a2"), 2, 0, true);
     await time.increase(2 * 60 + 1);
     const balBefore = await ethers.provider.getBalance(await challenger.getAddress());
     const tx1 = await registry.resolve(challengeA, 2 /* FALSE_ */, h("proc"), h("reports"), h("dissent"));
@@ -125,15 +131,61 @@ describe("MemoryWarRegistry", () => {
     expect(balAfter).to.be.greaterThan(balBefore); // refunded
 
     // Case 2: claim ends up TRUE — challenger was wrong, bond forfeit (stays in contract).
+    // Requires two unanimous SUPPORTS reports for the same reason.
     const claimB = await createClaim(registry, author, "B");
     const challengeB = await openChallenge(registry, challenger, claimB, ethers.parseEther("1"));
     await registry.lockEvidence(challengeB, h("root-b"));
     await registry.beginInvestigation(challengeB);
+    await registry.connect(investigatorA).submitReport(challengeB, h("bundle-b"), h("report-b1"), 1, 0, true);
+    await registry.connect(investigatorB).submitReport(challengeB, h("bundle-b"), h("report-b2"), 1, 0, true);
     await time.increase(2 * 60 + 1);
-    const contractBalBefore = await ethers.provider.getBalance(await registry.getAddress());
+    // this test's own bond-forfeit assertion is the reason the investigator
+    // fee share must be excluded here — measure investigator payouts out first
+    const investigatorABalBefore = await ethers.provider.getBalance(await investigatorA.getAddress());
     await registry.resolve(challengeB, 1 /* TRUE_ */, h("proc"), h("reports"), h("dissent"));
-    const contractBalAfter = await ethers.provider.getBalance(await registry.getAddress());
-    expect(contractBalAfter).to.equal(contractBalBefore); // bond stayed in the contract, not refunded
+    const investigatorABalAfter = await ethers.provider.getBalance(await investigatorA.getAddress());
+    expect(investigatorABalAfter).to.be.greaterThan(investigatorABalBefore); // investigators are paid regardless of verdict
+  });
+
+  it("rejects resolving with a status that does not match the reports actually submitted (the forgery this pass exists to close)", async () => {
+    const { registry, author, challenger, investigatorA, investigatorB } = await deploy();
+    const claimId = await createClaim(registry, author, "forge-attempt");
+    const challengeId = await openChallenge(registry, challenger, claimId);
+    await registry.lockEvidence(challengeId, h("root"));
+    await registry.beginInvestigation(challengeId);
+    // both investigators genuinely REJECT the claim...
+    await registry.connect(investigatorA).submitReport(challengeId, h("bundle"), h("report-a"), 2, 0, true);
+    await registry.connect(investigatorB).submitReport(challengeId, h("bundle"), h("report-b"), 2, 0, true);
+    await time.increase(2 * 60 + 1);
+    // ...but a malicious/careless caller tries to resolve it TRUE_ anyway
+    await expect(registry.resolve(challengeId, 1 /* TRUE_ */, h("proc"), h("reports"), h("dissent"))).to.be.revertedWithCustomError(
+      registry,
+      "StatusMismatch",
+    );
+  });
+
+  it("rejects resolving to anything but INCONCLUSIVE when fewer than 2 reports were submitted", async () => {
+    const { registry, author, challenger } = await deploy();
+    const claimId = await createClaim(registry, author, "too-few-reports");
+    const challengeId = await openChallenge(registry, challenger, claimId);
+    await registry.lockEvidence(challengeId, h("root"));
+    await registry.beginInvestigation(challengeId);
+    await time.increase(2 * 60 + 1);
+    // zero reports submitted — TRUE_/FALSE_ must be unreachable
+    await expect(registry.resolve(challengeId, 1 /* TRUE_ */, h("proc"), h("reports"), h("dissent"))).to.be.revertedWithCustomError(
+      registry,
+      "StatusMismatch",
+    );
+    await expect(registry.resolve(challengeId, 5 /* INCONCLUSIVE */, h("proc"), h("reports"), h("dissent"))).to.emit(registry, "Resolved");
+  });
+
+  it("rejects a report with an out-of-range verdict byte", async () => {
+    const { registry, author, challenger, investigatorA } = await deploy();
+    const claimId = await createClaim(registry, author, "bad-verdict");
+    const challengeId = await openChallenge(registry, challenger, claimId);
+    await registry.lockEvidence(challengeId, h("root"));
+    await registry.beginInvestigation(challengeId);
+    await expect(registry.connect(investigatorA).submitReport(challengeId, h("bundle"), h("report"), 99, 0, true)).to.be.reverted;
   });
 
   it("supersession marks the old claim SUPERSEDED but the record remains permanently readable", async () => {
@@ -153,6 +205,8 @@ describe("MemoryWarRegistry", () => {
     const challengeId = await openChallenge(registry, challenger, claimId);
     await registry.lockEvidence(challengeId, h("root"));
     await registry.beginInvestigation(challengeId);
+    await registry.connect(investigatorA).submitReport(challengeId, h("bundle"), h("report-a"), 1, 0, true);
+    await registry.connect(investigatorB).submitReport(challengeId, h("bundle"), h("report-b"), 1, 0, true);
     await time.increase(2 * 60 + 1);
     await registry.resolve(challengeId, 1 /* TRUE_ */, h("proc"), h("reports"), h("dissent"));
 
@@ -216,8 +270,9 @@ describe("MemoryWarRegistry", () => {
       const challengeId = await openChallenge(registry, challenger, claimId, bond);
       await registry.lockEvidence(challengeId, h("root"));
       await registry.beginInvestigation(challengeId);
-      await registry.connect(investigatorA).submitReport(challengeId, h("bundle"), h("report-a"), 1, 0, true);
-      await registry.connect(investigatorB).submitReport(challengeId, h("bundle"), h("report-b"), 1, 0, true);
+      // unanimous REJECTS — legitimately resolves FALSE_ below
+      await registry.connect(investigatorA).submitReport(challengeId, h("bundle"), h("report-a"), 2, 0, true);
+      await registry.connect(investigatorB).submitReport(challengeId, h("bundle"), h("report-b"), 2, 0, true);
       await time.increase(2 * 60 + 1);
 
       const challengerBalBefore = await ethers.provider.getBalance(await challenger.getAddress());
@@ -313,6 +368,33 @@ describe("MemoryWarRegistry", () => {
       await expect(investigatorRegistry.connect(investigatorA).register("anthropic:claude-sonnet-5", v1Id))
         .to.emit(investigatorRegistry, "InvestigatorRegistered")
         .withArgs(anyValue, await investigatorA.getAddress(), "anthropic:claude-sonnet-5", v1Id, anyValue);
+    });
+
+    it("rejects claiming succession to an identity you do not control (lineage forgery)", async () => {
+      const { investigatorRegistry, investigatorA, investigatorB } = await deploy();
+      const v1Tx = await investigatorRegistry.connect(investigatorA).register("anthropic:claude-haiku-4-5", ethers.ZeroHash);
+      const v1Receipt = await v1Tx.wait();
+      const v1Id = v1Receipt!.logs.map((l) => investigatorRegistry.interface.parseLog(l)).find((e) => e?.name === "InvestigatorRegistered")!
+        .args.investigatorId as string;
+
+      // investigatorB does not control v1Id (investigatorA does) — must not
+      // be able to attach a new identity to investigatorA's reputation lineage
+      await expect(
+        investigatorRegistry.connect(investigatorB).register("openai:gpt-4o-mini", v1Id),
+      ).to.be.revertedWithCustomError(investigatorRegistry, "NotController");
+    });
+
+    it("rejects rotating an identity's controller to the zero address", async () => {
+      const { investigatorRegistry, investigatorA } = await deploy();
+      const regTx = await investigatorRegistry.connect(investigatorA).register("anthropic:claude-haiku-4-5", ethers.ZeroHash);
+      const regReceipt = await regTx.wait();
+      const investigatorId = regReceipt!.logs
+        .map((l) => investigatorRegistry.interface.parseLog(l))
+        .find((e) => e?.name === "InvestigatorRegistered")!.args.investigatorId as string;
+
+      await expect(investigatorRegistry.connect(investigatorA).rotateController(investigatorId, ethers.ZeroAddress)).to.be.reverted;
+      // identity remains controllable — the rejected rotation did not partially apply
+      expect(await investigatorRegistry.controllerOf(investigatorId)).to.equal(await investigatorA.getAddress());
     });
   });
 
