@@ -46,42 +46,46 @@ export function ProtocolFlow() {
 
   return (
     <div className="rounded-xl border border-line bg-surface p-6 sm:p-7">
-      {/* Desktop: horizontal chain */}
+      {/* Desktop: horizontal chain. Eight stages plus captions can exceed
+          even a wide viewport's width, so the row scrolls within its own
+          bounds rather than bleeding past the card border. */}
       <div className="hidden lg:block">
-        <div className="flex items-center">
-          {STAGES.map((stage, i) => (
-            <div key={stage.key} className="flex flex-1 items-center last:flex-none">
-              <motion.button
-                type="button"
-                onMouseEnter={() => setActive(i)}
-                onFocus={() => setActive(i)}
-                onClick={() => setActive(i)}
-                initial={{ opacity: 0, y: 6 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true }}
-                transition={{ delay: i * 0.07, duration: 0.35 }}
-                className={`flex shrink-0 items-center gap-2 rounded-full border px-3.5 py-2 font-mono text-[12px] transition-colors ${
-                  i === active ? "border-accent bg-accent-soft text-accent" : i < active ? "border-line text-ink-dim" : "border-line-soft text-ink-faint hover:text-ink-dim"
-                }`}
-              >
-                <StageIcon stageKey={stage.key} active={i === active} />
-                {stage.label}
-              </motion.button>
-              {stage.downstream && (
-                <div className="mx-2 flex-1">
-                  <div className="relative h-px w-full bg-line-soft">
-                    <motion.div
-                      className="absolute inset-y-0 left-0 bg-accent"
-                      initial={false}
-                      animate={{ width: i < active ? "100%" : "0%" }}
-                      transition={{ duration: 0.3 }}
-                    />
+        <div className="overflow-x-auto pb-1">
+          <div className="flex min-w-max items-center">
+            {STAGES.map((stage, i) => (
+              <div key={stage.key} className="flex flex-1 items-center last:flex-none">
+                <motion.button
+                  type="button"
+                  onMouseEnter={() => setActive(i)}
+                  onFocus={() => setActive(i)}
+                  onClick={() => setActive(i)}
+                  initial={{ opacity: 0, y: 6 }}
+                  whileInView={{ opacity: 1, y: 0 }}
+                  viewport={{ once: true }}
+                  transition={{ delay: i * 0.07, duration: 0.35 }}
+                  className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-2 font-mono text-[12px] transition-colors ${
+                    i === active ? "border-accent bg-accent-soft text-accent" : i < active ? "border-line text-ink-dim" : "border-line-soft text-ink-faint hover:text-ink-dim"
+                  }`}
+                >
+                  <StageIcon stageKey={stage.key} active={i === active} />
+                  {stage.label}
+                </motion.button>
+                {stage.downstream && (
+                  <div className="mx-1.5 w-16 shrink-0 grow xl:w-24">
+                    <div className="relative h-px w-full bg-line-soft">
+                      <motion.div
+                        className="absolute inset-y-0 left-0 bg-accent"
+                        initial={false}
+                        animate={{ width: i < active ? "100%" : "0%" }}
+                        transition={{ duration: 0.3 }}
+                      />
+                    </div>
+                    <p className="mt-2 text-center text-[10.5px] italic leading-snug text-ink-faint">{stage.downstream}</p>
                   </div>
-                  <p className="mt-2 text-center text-[10.5px] italic leading-snug text-ink-faint">{stage.downstream}</p>
-                </div>
-              )}
-            </div>
-          ))}
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
