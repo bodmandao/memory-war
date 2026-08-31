@@ -1,5 +1,25 @@
 # Final Audit
 
+> **Addendum 8 — the first fully resolved case on 0G mainnet.** A
+> second, independently funded mainnet wallet was provided specifically
+> for the `investigatorB` role (`makeChain()` in `demo/lib.ts` now
+> checks `INVESTIGATOR_B_PRIVATE_KEY` for that one role and falls back
+> to the shared demo-relayer key otherwise — nothing else changed).
+> With two genuinely distinct investigator addresses, the exact
+> `DuplicateReport` wall from Addendum 7 no longer applies, and a full
+> pay-per-verification lifecycle completed on real 0G mainnet end to
+> end: claim → payment → evidence → two independent TEE-verified
+> reports (one per address) → mechanical resolution (`TRUE`) → atomic
+> on-chain settlement (both investigators paid in the same transaction
+> as the verdict) → indexer reconstruction → client. Every field below
+> was pulled from a direct `eth_getLogs`/contract-read query against
+> mainnet, not from the demo script's own printed summary — see the
+> final report for the exact claim ID, challenge ID, both investigator
+> addresses, and all three transaction hashes. `DuplicateReport`
+> protection itself was not touched and remains fully active (confirmed
+> by the still-passing `MemoryWarRegistry.test.ts` replay-protection
+> case).
+>
 > **Addendum 7 — judge-readiness pass: client wired to real mainnet
 > state, and the demo relayer's real ceiling found.** An eighth pass
 > added a live, data-driven "Infrastructure Proof" panel to the landing

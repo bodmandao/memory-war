@@ -79,7 +79,20 @@ async function makeChain(role: keyof typeof LOCAL_DEVNET_KEYS): Promise<ZgChainA
     trackedChains.push(connected);
     return connected;
   }
-  return base; // testnet/mainnet: single operator key from .env drives every role in this MVP demo
+  // testnet/mainnet: a single shared operator key from .env drives every
+  // role in this MVP demo relayer, EXCEPT investigatorB, which uses its
+  // own independently funded key when configured
+  // (INVESTIGATOR_B_PRIVATE_KEY) — required for a genuinely distinct
+  // second investigator address. Without it, investigatorA and
+  // investigatorB resolve to the same address, and the contract's own
+  // DuplicateReport protection correctly rejects the second report on
+  // the same challenge (see docs/AUDIT.md Addendum 7).
+  if (role === "investigatorB" && process.env.INVESTIGATOR_B_PRIVATE_KEY) {
+    const connected = await base.connectAs(process.env.INVESTIGATOR_B_PRIVATE_KEY);
+    trackedChains.push(connected);
+    return connected;
+  }
+  return base;
 }
 
 export async function runScenarioA(): Promise<DemoTrace> {
