@@ -81,13 +81,21 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.get("/health", (_req, res) => {
+app.get("/health", async (_req, res) => {
+  // storageMode reflects whether this instance is genuinely CONFIGURED
+  // for live 0G Storage (indexer RPC + chain RPC + a private key all
+  // present) — see ZgStorageAdapter.currentMode(). It does not make a
+  // live network round-trip on every health check; it's the same
+  // honest, mode-aware label the storage adapter itself always uses,
+  // never upgraded past what's actually configured.
+  const storageMode = await storage.currentMode();
   res.json({
     ok: true,
     note: "This service is NOT authoritative — everything below is reconstructed from on-chain events (spec §5). Deleting this process and restarting it reproduces identical state.",
     contractAddress: CONTRACT_ADDRESS ?? null,
     investigatorRegistryAddress: INVESTIGATOR_REGISTRY_ADDRESS,
     rpcUrl: RPC_URL,
+    storageMode,
     lastRebuildAt: lastRebuildAt || null,
     lastRebuildError,
     eventCount: state.eventCount,

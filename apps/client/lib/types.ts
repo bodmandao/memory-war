@@ -111,6 +111,7 @@ export interface Health {
   contractAddress: string | null;
   investigatorRegistryAddress: string | null;
   rpcUrl: string;
+  storageMode: StorageMode;
   lastRebuildAt: number | null;
   lastRebuildError: string | null;
   eventCount: number;
@@ -131,7 +132,7 @@ export interface DemoTrace {
 
 export interface AgentVerifyResult {
   verdict: string;
-  confidence: number;
+  confidence: number | null;
   evidenceRoot: string;
   investigationId: string;
   investigators: Array<{
@@ -142,6 +143,7 @@ export interface AgentVerifyResult {
     attestation: { mode: AttestationMode; verified: boolean; detail: string };
   }>;
   attestation: { anyLiveTee: boolean; modes: AttestationMode[] };
+  procedure: { id: string; version: string; procedureHash: string };
   payment: { feeWei: string; payouts: Array<{ investigator: string; amountWei: string }> };
   history: { claimId: string; onChainTxHash: string; queryUrl: string };
 }

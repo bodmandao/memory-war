@@ -1,5 +1,67 @@
 # Final Audit
 
+> **Addendum 7 — judge-readiness pass: client wired to real mainnet
+> state, and the demo relayer's real ceiling found.** An eighth pass
+> added a live, data-driven "Infrastructure Proof" panel to the landing
+> page (network/chain ID derived from the indexer's actual configured
+> RPC, contract addresses and storage mode read from a real `/health`
+> call — never hardcoded), corrected `0G_COMPUTE_TEE` labeling
+> everywhere in the client to say `TESTNET` explicitly (it never did
+> before, which technically wasn't wrong but wasn't as precise as it
+> should be), and exposed `procedure.{id,version,procedureHash}` on
+> `/agent/verify-claim`'s response (already computed by `buildVerdict()`,
+> just not returned before).
+>
+> **The retry protection from Addendum 6 was incomplete — extended it.**
+> `findEventInReceipt` only helped once a receipt was already in hand;
+> a fresh mainnet run hit `tx.wait()` throwing outright ("no matching
+> receipts found: this may indicate potential data corruption") before
+> ever returning a receipt at all, which the existing fix couldn't
+> catch. Added `waitRobust()`, the same bounded-retry philosophy applied
+> to `.wait()` itself, and replaced all 19 remaining direct `.wait()`
+> call sites in `demo/lib.ts` with it (verified via search — none
+> remain unprotected). Confirmed against 3 clean local-devnet
+> `demo:full` runs (no behavior change when nothing is actually flaky)
+> and re-verified against real mainnet, where it visibly got the flow
+> significantly further than before.
+>
+> **The real ceiling on completing a resolved claim on mainnet, found
+> and precisely diagnosed — not a bug.** After the retry fix, a live
+> mainnet run reached real report submission and reverted with a
+> genuine on-chain error, decoded by computing every custom error
+> selector in the contract and matching: `0xd6247cb5` =
+> `DuplicateReport(address investigator, bytes32 challengeId)`. Because
+> `investigatorA` and `investigatorB` both resolve to the same shared
+> demo-relayer wallet on mainnet (the address the whole build falls
+> back to for every role once the network isn't `LOCAL_DEVNET` — the
+> already-disclosed single-key limitation), the contract's own replay
+> protection correctly and deterministically rejects the second
+> investigator's report as a duplicate from the same address, every
+> time, regardless of retries. This corrects an assumption from
+> Addendum 6: running with one wallet does not just make investigator
+> diversity "illustrative" as previously stated — it makes it
+> **impossible to reach MIN_REPORTS_REQUIRED with two distinct reports
+> at all**, because the second submission is rejected outright. A fully
+> resolved claim on mainnet genuinely requires a second, independently
+> funded mainnet wallet; provisioning one is a real spending decision,
+> not something to force unilaterally. What real mainnet state exists
+> from this pass instead: 4 real claims, 2 reaching `INVESTIGATING`
+> with a live-uploaded evidence bundle and a real `requestVerification`
+> payment each, 6 real `InvestigatorRegistered` identities (3
+> anthropic:claude-haiku-4-5, 3 openai:gpt-4o-mini) — all independently
+> queryable at `MemoryWarRegistry` `0x20eC53851DcDcA67Ae8340c9962baCedaF63aD83`
+> and `InvestigatorRegistry` `0xde4070363ee7B6Ba0ee567929b532489a3b4A8f4`.
+>
+> **Client verified against this real, if sparse, mainnet state — not
+> against a synthetic fixture.** All 8 routes served 200 against the
+> live indexer (real `/health.storageMode: "0G_STORAGE_LIVE"`, real
+> event count growing across the pass as the RPC caught up), including
+> a real claim detail page and a real investigator detail page. The
+> empty/sparse states (0 investigators before registrations landed, an
+> OPEN claim with no challenge) rendered honestly rather than needing
+> any special-casing — exactly the property the whole honesty-labeling
+> design exists for.
+>
 > **Addendum 6 — real 0G mainnet + testnet deployment.** A seventh pass
 > deployed and independently exercised the actual live rails, not just
 > configuration. Every claim below was verified by direct query (real

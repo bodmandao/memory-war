@@ -69,11 +69,12 @@ export default function VerifyPage() {
         <pre className="overflow-auto rounded-lg border border-line bg-ground p-4 text-[12px] leading-relaxed text-ink-dim">
           {`{
   "verdict": "TRUE" | "FALSE" | "CONTESTED" | "INCONCLUSIVE",
-  "confidence": number,
+  "confidence": number | null,   // null for CONTESTED/INCONCLUSIVE — no single confidence applies
   "evidenceRoot": "0x…",
   "investigationId": "0x…",
   "investigators": [{ "address", "investigatorId", "modelProvider", "verdict", "attestation": { "mode", "verified", "detail" } }],
   "attestation": { "anyLiveTee": boolean, "modes": [...] },
+  "procedure": { "id", "version", "procedureHash" },
   "payment": { "feeWei", "payouts": [{ "investigator", "amountWei" }] },
   "history": { "claimId", "onChainTxHash", "queryUrl" }
 }`}
@@ -149,13 +150,30 @@ export default function VerifyPage() {
           <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="mt-6 space-y-4 border-t border-line pt-6">
             <div className="flex flex-wrap items-center gap-3">
               <span className="rounded-full border border-accent/30 bg-accent-soft px-3 py-1 font-mono text-[13px] text-accent">{result.verdict}</span>
-              <span className="text-[13px] text-ink-dim">confidence {(result.confidence * 100).toFixed(0)}%</span>
+              <span className="text-[13px] text-ink-dim">
+                {result.confidence === null ? "no single confidence applies — investigators disagreed" : `confidence ${(result.confidence * 100).toFixed(0)}%`}
+              </span>
             </div>
             <KV
               rows={[
                 { k: "Investigation ID", v: <Hash value={result.investigationId} /> },
                 { k: "Evidence root", v: <Hash value={result.evidenceRoot} /> },
+                { k: "Procedure", v: <span className="font-mono text-[13px]">{result.procedure.id}/{result.procedure.version}</span> },
+                { k: "Procedure hash", v: <Hash value={result.procedure.procedureHash} /> },
                 { k: "Verification fee", v: fmtWei(result.payment.feeWei) },
+                {
+                  k: "Settlement",
+                  v: (
+                    <ul className="space-y-1.5">
+                      {result.payment.payouts.map((p, i) => (
+                        <li key={i} className="flex flex-wrap items-center gap-2">
+                          <Hash value={p.investigator} len={6} />
+                          <span className="font-mono text-ink">{fmtWei(p.amountWei)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ),
+                },
                 { k: "On-chain tx", v: <Hash value={result.history.onChainTxHash} /> },
                 {
                   k: "Claim record",

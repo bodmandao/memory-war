@@ -23,8 +23,13 @@ export function StatusBadge({ status }: { status: string }) {
 }
 
 const MODE_META: Record<string, { label: string; cls: string; title: string }> = {
-  "0G_STORAGE_LIVE": { label: "0G STORAGE · LIVE", cls: "bg-accent-soft text-accent border-accent-dim", title: "Uploaded to and retrieved from the live 0G Storage network." },
-  "0G_COMPUTE_TEE": { label: "0G COMPUTE · TEE", cls: "bg-accent-soft text-accent border-accent-dim", title: "Executed on live 0G Compute with TEE attestation. Attestation proves this exact model produced this exact output — it does not prove the claim is true." },
+  "0G_STORAGE_LIVE": { label: "0G STORAGE · LIVE", cls: "bg-accent-soft text-accent border-accent-dim", title: "Uploaded to and retrieved from the live 0G Storage network (mainnet)." },
+  "0G_COMPUTE_TEE": {
+    label: "0G COMPUTE · TEE · TESTNET",
+    cls: "bg-accent-soft text-accent border-accent-dim",
+    title:
+      "Executed on live 0G Compute with TEE attestation, on 0G testnet — 0G Compute is not documented as available on 0G mainnet at all. Attestation proves this exact model produced this exact output; it does not prove the claim is true.",
+  },
   LOCAL_LLM: { label: "LOCAL LLM", cls: "bg-contested/10 text-contested border-contested/30", title: "A real model call, made locally — not run on 0G Compute, not TEE-attested." },
   LOCAL_DEMO: { label: "LOCAL DEMO", cls: "bg-contested/10 text-contested border-contested/30", title: "Real content-hashing and tamper detection, against a local content-addressed store instead of live 0G Storage." },
   SIMULATED: { label: "SIMULATED", cls: "bg-line-soft text-ink-faint border-line", title: "A deterministic rule-based stub — not a model call of any kind." },
@@ -40,12 +45,18 @@ export function ModeBadge({ mode }: { mode: string }) {
 }
 
 const INFRA_META: Record<string, { label: string; cls: string; title: string }> = {
-  "0G_STORAGE_LIVE": { label: "LIVE", cls: "bg-accent-soft text-accent border-accent-dim", title: "Uploaded to and retrieved from the live 0G Storage network." },
+  "0G_STORAGE_LIVE": { label: "LIVE · MAINNET", cls: "bg-accent-soft text-accent border-accent-dim", title: "Uploaded to and retrieved from the live 0G Storage network on 0G mainnet — independently verified." },
   LOCAL_DEMO: { label: "LOCAL DEMO", cls: "bg-contested/10 text-contested border-contested/30", title: "Real content-hashing and tamper detection, against a local content-addressed store — not the live 0G Storage network." },
-  "0G_COMPUTE_TEE": { label: "TEE LIVE", cls: "bg-accent-soft text-accent border-accent-dim", title: "Executed on live 0G Compute with TEE attestation." },
+  "0G_COMPUTE_TEE": {
+    label: "TEE VERIFIED · TESTNET",
+    cls: "bg-accent-soft text-accent border-accent-dim",
+    title: "Executed on live 0G Compute with TEE attestation, on 0G testnet — independently verified. 0G Compute is not documented as available on 0G mainnet.",
+  },
   LOCAL_LLM: { label: "LOCAL LLM", cls: "bg-contested/10 text-contested border-contested/30", title: "A real model call, made locally — not run on 0G Compute, not TEE-attested." },
   SIMULATED: { label: "SIMULATED", cls: "bg-line-soft text-ink-faint border-line", title: "A deterministic rule-based stub — not a model call of any kind." },
-  COMMITMENT_READY: { label: "COMMITMENT READY", cls: "bg-line-soft text-ink-dim border-line", title: "The batch-commitment math this needs is implemented and tested, not wired to a live 0G DA network call — see the note below for why." },
+  COMMITMENT_READY: { label: "COMMITMENT READY", cls: "bg-line-soft text-ink-dim border-line", title: "The batch-commitment math this needs is implemented and tested, not wired to a live 0G DA network call — see the disclosure panel for why." },
+  ON_CHAIN: { label: "ON-CHAIN", cls: "bg-accent-soft text-accent border-accent-dim", title: "Real native-token settlement, enforced by the deployed contract — not a separate payments SDK." },
+  NOT_USED: { label: "DELIBERATELY NOT USED", cls: "bg-line-soft text-ink-faint border-line", title: "Evaluated and rejected for this role — see the disclosure panel for why." },
 };
 
 export function InfraBadge({ state }: { state: string }) {

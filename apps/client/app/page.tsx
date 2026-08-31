@@ -7,9 +7,9 @@ import { api } from "@/lib/api";
 import type { Claim, Investigator } from "@/lib/types";
 import { StatCounter } from "@/components/StatCounter";
 import { Card } from "@/components/Card";
-import { InfraBadge } from "@/components/Badge";
 import { ProtocolFlow } from "@/components/ProtocolFlow";
 import { NetworkBackground } from "@/components/NetworkBackground";
+import { InfrastructureProof } from "@/components/InfrastructureProof";
 import { IndexerUnavailable, LocalDemonstrationNote } from "@/components/States";
 import { DashboardMetricsSkeleton } from "@/components/Skeletons";
 
@@ -88,34 +88,31 @@ export default function LandingPage() {
         )}
       </section>
 
-      {/* 0G integration honesty */}
+      {/* Real, live-derived infrastructure state — never hardcoded */}
       <section>
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-[13px] font-semibold uppercase tracking-wide text-ink-faint">0G integration status (this build, by default)</h2>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[11px] text-ink-faint">STORAGE</span>
-            <InfraBadge state="LOCAL_DEMO" />
-            <span className="ml-2 text-[11px] text-ink-faint">COMPUTE</span>
-            <InfraBadge state="SIMULATED" />
-            <span className="ml-2 text-[11px] text-ink-faint">DA</span>
-            <InfraBadge state="COMMITMENT_READY" />
-          </div>
-        </div>
+        <h2 className="mb-4 text-[13px] font-semibold uppercase tracking-wide text-ink-faint">Infrastructure proof</h2>
+        <InfrastructureProof />
       </section>
 
       <section className="grid gap-4 sm:grid-cols-2">
         <Card title="0G Storage" subtitle="Evidence, claim text, and investigator reasoning are content-addressed and never stored raw on-chain.">
-          <p className="mb-3 text-[13px] leading-relaxed text-ink-dim">The live path calls the real 0G Storage SDK.</p>
+          <p className="mb-3 text-[13px] leading-relaxed text-ink-dim">
+            0G Storage is live and independently exercised on mainnet — real uploads, real downloads, byte-for-byte,
+            through the live 0G Storage SDK against the mainnet indexer.
+          </p>
           <LocalDemonstrationNote>
-            Without a funded wallet and indexer RPC configured, every adapter falls back honestly here — real
+            Without a funded wallet and indexer RPC configured, this adapter falls back honestly here instead — real
             content-hashing and real tamper detection, against a local content-addressed store. Never upgraded in the
             UI to look more impressive than what actually happened.
           </LocalDemonstrationNote>
         </Card>
         <Card title="0G Compute" subtitle="Independent investigators evaluate evidence and issue signed reports.">
           <p className="mb-3 text-[13px] leading-relaxed text-ink-dim">
-            Live mode runs on 0G Compute with TEE attestation (Intel TDX / NVIDIA H100-H200). TEE attestation proves a
-            specific model produced a specific output from a specific input — it does not prove the claim is true.
+            0G Compute has genuine TEE verification, independently exercised on testnet — a real inference call with
+            <code className="mx-1 font-mono text-accent">broker.inference.processResponse()</code>
+            confirming attestation. <span className="text-ink">Mainnet Compute availability was not established</span> —
+            0G&apos;s own mainnet documentation lists no compute broker endpoint at all. TEE attestation proves a
+            specific model produced a specific output from a specific input; it does not prove the claim is true.
           </p>
           <LocalDemonstrationNote>
             Without a funded ledger, this falls back to a real local LLM call, or with no model key at all, a
@@ -126,23 +123,25 @@ export default function LandingPage() {
 
       {/* Scaling posture — DA and identity decisions, stated plainly rather than implemented decoratively */}
       <section className="grid gap-4 sm:grid-cols-2">
-        <Card title="High-throughput DA commitments" subtitle="Not wired to a live network call in this build.">
+        <Card title="0G DA — commitment ready, not live" subtitle="Not currently connected to a live public DA API.">
           <p className="text-[13px] leading-relaxed text-ink-dim">
             Every evidence artifact is already individually content-addressed and retrievable from 0G Storage, and
             every state transition is already a cheap, individually-verifiable on-chain event — there is no
             undifferentiated batch a light client would otherwise have to trust blindly, which is the problem 0G DA
-            actually solves. The batch-commitment math this would need is implemented and tested (
+            actually solves. The protocol has tested commitment/batching primitives (
             <code className="font-mono text-accent">packages/protocol-core/src/daBatch.ts</code>) for a future
-            high-volume deployment, but calling a live DA network today would be decoration, not engineering.
+            high-volume deployment, and labels this honestly as <span className="text-ink">COMMITMENT READY</span> —
+            not integrated, not live, not marketed as either.
           </p>
         </Card>
-        <Card title="Why investigator identity isn't ERC-7857" subtitle="Agentic ID was considered and deliberately not used here.">
+        <Card title="Why investigator identity isn't ERC-7857" subtitle="Evaluated and deliberately rejected for this role.">
           <p className="text-[13px] leading-relaxed text-ink-dim">
-            ERC-7857 (Agentic ID) is built for encrypted, transferable intelligence — a fundamentally different shape
-            than what an investigator needs, which is a persistent, publicly auditable identity with explicit
-            version lineage across key rotation. <code className="font-mono text-accent">InvestigatorRegistry.sol</code>{" "}
-            provides exactly that, is not transferable, and is not encrypted — reputation has to stay visible to mean
-            anything.
+            ERC-7857 (Agentic ID) was evaluated for investigator identity and deliberately rejected: it&apos;s built
+            for encrypted, transferable intelligence — a fundamentally different shape than what an investigator
+            needs, which is a persistent, publicly auditable identity with explicit version lineage across key
+            rotation. <code className="font-mono text-accent">InvestigatorRegistry.sol</code> provides exactly that
+            required auditable identity/lineage semantics — not transferable, not encrypted, because reputation has
+            to stay visible to mean anything.
           </p>
         </Card>
       </section>
