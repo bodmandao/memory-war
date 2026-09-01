@@ -95,9 +95,10 @@ async function makeChain(role: keyof typeof LOCAL_DEVNET_KEYS): Promise<ZgChainA
   return base;
 }
 
-export async function runScenarioA(): Promise<DemoTrace> {
+export async function runScenarioA(onStep?: (step: DemoStep) => void): Promise<DemoTrace> {
   try {
   const steps: DemoStep[] = [];
+  const push = (s: DemoStep) => { steps.push(s); onStep?.(s); };
   const storage = new ZgStorageAdapter();
 
   const claimAText = "Protocol X raised $40M";
@@ -106,7 +107,7 @@ export async function runScenarioA(): Promise<DemoTrace> {
   const predA = extractRuleBased(claimAText);
   const predB = extractRuleBased(claimBText);
   const relationship = classifyRelationship(predA, predB);
-  steps.push({
+  push({
     label: "Predicate disambiguation",
     detail: `"${claimAText}" vs "${claimBText}" -> ${relationship.relation} (${relationship.reason})`,
     data: { predA, predB, relationship },
@@ -115,20 +116,20 @@ export async function runScenarioA(): Promise<DemoTrace> {
   const chain = await makeChain("author");
   const upA = await storage.upload(textToBytes(claimAText));
   const upB = await storage.upload(textToBytes(claimBText));
-  steps.push({ label: "Evidence text committed to storage", detail: `mode=${upA.mode}`, data: { upA, upB } });
+  push({ label: "Evidence text committed to storage", detail: `mode=${upA.mode}`, data: { upA, upB } });
 
   const claimAId = await createClaimOnChain(chain, hashUtf8(JSON.stringify(predA)), upA.rootHash, predA);
   const claimBId = await createClaimOnChain(chain, hashUtf8(JSON.stringify(predB)), upB.rootHash, predB);
-  steps.push({ label: "Claims created on-chain", detail: `A=${claimAId} B=${claimBId}` });
+  push({ label: "Claims created on-chain", detail: `A=${claimAId} B=${claimBId}` });
 
   if (relationship.requiresChallenge) {
-    steps.push({ label: "UNEXPECTED", detail: "classifier says this requires a challenge — scenario A fixture is wrong", data: relationship });
+    push({ label: "UNEXPECTED", detail: "classifier says this requires a challenge — scenario A fixture is wrong", data: relationship });
     return { scenario: "A: predicate mismatch", steps, ok: false };
   }
 
   const tx = await chain.contract.recordRelationship(claimAId, claimBId, relationTypeIndex(relationship.relation));
   await waitRobust(tx);
-  steps.push({
+  push({
     label: "RELATES_TO edge recorded — NO bond, NO challenge, NO investigation",
     detail: "Both claims stand side by side. This is the semantic sophistication the naive version of this protocol would not have.",
   });
@@ -139,9 +140,10 @@ export async function runScenarioA(): Promise<DemoTrace> {
   }
 }
 
-export async function runScenarioB(): Promise<DemoTrace> {
+export async function runScenarioB(onStep?: (step: DemoStep) => void): Promise<DemoTrace> {
   try {
   const steps: DemoStep[] = [];
+  const push = (s: DemoStep) => { steps.push(s); onStep?.(s); };
   const storage = new ZgStorageAdapter();
 
   const claimText = "Protocol X raised $40M";
@@ -150,10 +152,10 @@ export async function runScenarioB(): Promise<DemoTrace> {
   const predA = extractRuleBased(claimText);
   const predB = extractRuleBased(counterClaimText);
   const relationship = classifyRelationship(predA, predB);
-  steps.push({ label: "Predicate disambiguation", detail: `${relationship.relation} — ${relationship.reason}`, data: relationship });
+  push({ label: "Predicate disambiguation", detail: `${relationship.relation} — ${relationship.reason}`, data: relationship });
 
   if (!relationship.requiresChallenge) {
-    steps.push({ label: "UNEXPECTED", detail: "classifier did not flag a contradiction — scenario B fixture is wrong" });
+    push({ label: "UNEXPECTED", detail: "classifier did not flag a contradiction — scenario B fixture is wrong" });
     return { scenario: "B: genuine contradiction", steps, ok: false };
   }
 
@@ -165,14 +167,14 @@ export async function runScenarioB(): Promise<DemoTrace> {
 
   const claimUp = await storage.upload(textToBytes(claimText));
   const claimId = await createClaimOnChain(authorChain, hashUtf8(JSON.stringify(predA)), claimUp.rootHash, predA);
-  steps.push({ label: "Claim created", detail: `"${claimText}" -> ${claimId}`, data: { storageMode: claimUp.mode } });
+  push({ label: "Claim created", detail: `"${claimText}" -> ${claimId}`, data: { storageMode: claimUp.mode } });
 
   const bond = 1_000_000_000_000_000n; // 0.001 native token — deliberately small, spec §10: minimal bonding, no tokenomics
   const openTx = await challengerChain.contract.openChallenge(claimId, 0 /* CONTRADICTION */, { value: bond });
   const openReceipt = await waitRobust(openTx);
   const opened = await findEventInReceipt(challengerChain, openReceipt, challengerChain.contract.interface, "ChallengeOpened");
   const challengeId = opened.args.challengeId as string;
-  steps.push({ label: "Bonded CONTRADICTION challenge opened", detail: `challengeId=${challengeId} bond=${bond} wei`, data: { challengeId } });
+  push({ label: "Bonded CONTRADICTION challenge opened", detail: `challengeId=${challengeId} bond=${bond} wei`, data: { challengeId } });
 
   const ev1 = makeEvidence({ bytes: textToBytes(evidenceForClaim), sourceType: "OFFICIAL_ANNOUNCEMENT", submittedBy: await authorChain.signer.getAddress() as `0x${string}`, submittedAt: nowSec() });
   const ev2 = makeEvidence({ bytes: textToBytes(evidenceForCounter), sourceType: "ONCHAIN_STATE", submittedBy: await challengerChain.signer.getAddress() as `0x${string}`, submittedAt: nowSec() });
@@ -181,14 +183,14 @@ export async function runScenarioB(): Promise<DemoTrace> {
 
   await waitRobust(await authorChain.contract.submitEvidence(challengeId, ev1.id));
   await waitRobust(await challengerChain.contract.submitEvidence(challengeId, ev2.id));
-  steps.push({ label: "Evidence submitted by both sides", detail: `ev1=${ev1.id} (${up1.mode}), ev2=${ev2.id} (${up2.mode})` });
+  push({ label: "Evidence submitted by both sides", detail: `ev1=${ev1.id} (${up1.mode}), ev2=${ev2.id} (${up2.mode})` });
 
   const bundle = lockBundle(buildBundle(challengeId as Hash, [ev1.id, ev2.id]), nowSec());
   await waitRobust(await authorChain.contract.lockEvidence(challengeId, bundle.root));
-  steps.push({ label: "Evidence bundle locked", detail: `root=${bundle.root} (order-independent commitment — see protocol-core/evidence.ts)` });
+  push({ label: "Evidence bundle locked", detail: `root=${bundle.root} (order-independent commitment — see protocol-core/evidence.ts)` });
 
   await waitRobust(await authorChain.contract.beginInvestigation(challengeId));
-  steps.push({ label: "Investigation started", detail: "independent investigators now pull the locked bundle" });
+  push({ label: "Investigation started", detail: "independent investigators now pull the locked bundle" });
 
   const investigatorA = new ZgComputeInvestigator("provider-alpha");
   const investigatorB = new ZgComputeInvestigator("provider-beta");
@@ -213,7 +215,7 @@ export async function runScenarioB(): Promise<DemoTrace> {
     evidenceBundleHash: bundle.root,
     investigatorId: (await investigatorBAddr.getAddress()) as `0x${string}`,
   });
-  steps.push({
+  push({
     label: "Independent, model-diverse investigator reports",
     detail: `A: ${reportA.verdict} (${reportA.attestation.mode}, verified=${reportA.attestation.verified}) | B: ${reportB.verdict} (${reportB.attestation.mode}, verified=${reportB.attestation.verified})`,
     data: { reportA, reportB },
@@ -233,7 +235,7 @@ export async function runScenarioB(): Promise<DemoTrace> {
     resolvedAt: nowSec(),
     validFrom: nowSec(),
   });
-  steps.push({
+  push({
     label: "Mechanical resolution applied (off-chain, deterministic, auditable)",
     detail: `${verdict.status} — ${verdict.rationale}`,
     data: { procedure: procedure.describe(), verdict },
@@ -243,10 +245,10 @@ export async function runScenarioB(): Promise<DemoTrace> {
   const statusIndex = verdictStatusIndex(verdict.status);
   const resolveTx = await authorChain.contract.resolve(challengeId, statusIndex, verdict.procedureHash, verdict.reportsRoot, hashUtf8(JSON.stringify(verdict.dissent)));
   await waitRobust(resolveTx);
-  steps.push({ label: "Verdict committed on-chain", detail: `status=${verdict.status}`, data: { challengeId, txHash: resolveTx.hash } });
+  push({ label: "Verdict committed on-chain", detail: `status=${verdict.status}`, data: { challengeId, txHash: resolveTx.hash } });
 
   const claimRecord = await authorChain.contract.claims(claimId);
-  steps.push({
+  push({
     label: "Original claim still queryable, not deleted",
     detail: `claim ${claimId} status on-chain = ${verdict.status} — full evidentiary history remains readable via the indexer`,
     data: { author: claimRecord.author },
@@ -264,9 +266,10 @@ export async function runScenarioB(): Promise<DemoTrace> {
  * an investigation"), and the investigators that get paid are portable,
  * registered identities (spec Priority 2), not bare addresses.
  */
-export async function runScenarioC(): Promise<DemoTrace> {
+export async function runScenarioC(onStep?: (step: DemoStep) => void): Promise<DemoTrace> {
   try {
   const steps: DemoStep[] = [];
+  const push = (s: DemoStep) => { steps.push(s); onStep?.(s); };
   const storage = new ZgStorageAdapter();
 
   const claimText = "Protocol X has $100M in total value locked";
@@ -276,7 +279,7 @@ export async function runScenarioC(): Promise<DemoTrace> {
   const authorChain = await makeChain("author");
 
   if (!agentChain.investigatorRegistry) {
-    steps.push({
+    push({
       label: "InvestigatorRegistry not configured",
       detail: "set INVESTIGATOR_REGISTRY_ADDRESS in .env (printed by chain:deploy:local) to run the portable-identity path",
     });
@@ -286,14 +289,14 @@ export async function runScenarioC(): Promise<DemoTrace> {
   const pred = extractRuleBased(claimText);
   const claimUp = await storage.upload(textToBytes(claimText));
   const claimId = await createClaimOnChain(authorChain, hashUtf8(JSON.stringify(pred)), claimUp.rootHash, pred);
-  steps.push({ label: "Claim created", detail: `"${claimText}" -> ${claimId}` });
+  push({ label: "Claim created", detail: `"${claimText}" -> ${claimId}` });
 
   const fee = 2_000_000_000_000_000n; // 0.002 native token — the verification fee, paid entirely to investigators (spec Priority 1)
   const reqTx = await agentChain.contract.requestVerification(claimId, { value: fee });
   const reqReceipt = await waitRobust(reqTx);
   const opened = await findEventInReceipt(agentChain, reqReceipt, agentChain.contract.interface, "ChallengeOpened");
   const requestId = opened.args.challengeId as string;
-  steps.push({
+  push({
     label: "Agent pays a verification fee — no adversary, no bond game, just a request",
     detail: `requestId=${requestId} fee=${fee} wei (0G Chain native settlement — see docs/AUDIT.md on why there is no separate "0G Pay" SDK to call here)`,
   });
@@ -303,7 +306,7 @@ export async function runScenarioC(): Promise<DemoTrace> {
 
   const idA = await registerInvestigatorIdentity(investigatorAChain, "anthropic:claude-haiku-4-5");
   const idB = await registerInvestigatorIdentity(investigatorBChain, "openai:gpt-4o-mini");
-  steps.push({
+  push({
     label: "Investigators registered as portable identities (InvestigatorRegistry, not ERC-7857 — see docs/ERC7857_DECISION.md)",
     detail: `idA=${idA} idB=${idB} — these ids persist independently of this or any other single investigation`,
   });
@@ -314,7 +317,7 @@ export async function runScenarioC(): Promise<DemoTrace> {
   const bundle = lockBundle(buildBundle(requestId as Hash, [ev.id]), nowSec());
   await waitRobust(await authorChain.contract.lockEvidence(requestId, bundle.root));
   await waitRobust(await authorChain.contract.beginInvestigation(requestId));
-  steps.push({ label: "Evidence locked, investigation started", detail: `evidenceRoot=${bundle.root}` });
+  push({ label: "Evidence locked, investigation started", detail: `evidenceRoot=${bundle.root}` });
 
   const investigatorA = new ZgComputeInvestigator("provider-alpha");
   const investigatorB = new ZgComputeInvestigator("provider-beta");
@@ -337,7 +340,7 @@ export async function runScenarioC(): Promise<DemoTrace> {
 
   await submitReportAsIdentityOnChain(investigatorAChain, requestId, idA, bundle.root, reportA);
   await submitReportAsIdentityOnChain(investigatorBChain, requestId, idB, bundle.root, reportB);
-  steps.push({
+  push({
     label: "Independent investigators execute, reports linked to their persistent identities",
     detail: `A: ${reportA.verdict} (${reportA.attestation.mode}) | B: ${reportB.verdict} (${reportB.attestation.mode})`,
     data: { reportA, reportB },
@@ -367,13 +370,13 @@ export async function runScenarioC(): Promise<DemoTrace> {
   const balAAfter = await agentChain.provider.getBalance(await investigatorAChain.signer.getAddress());
   const balBAfter = await agentChain.provider.getBalance(await investigatorBChain.signer.getAddress());
 
-  steps.push({
+  push({
     label: "Verdict committed AND investigators paid, in the same transaction",
     detail: `${verdict.status} — investigatorA received ${(balAAfter - balABefore).toString()} wei, investigatorB received ${(balBAfter - balBBefore).toString()} wei`,
     data: { verdict: verdict.status, rationale: verdict.rationale, payouts, feePaid: fee.toString() },
   });
 
-  steps.push({
+  push({
     label: "History remains permanently queryable by either persistent identity",
     detail: `GET /investigators/${idA} and /investigators/${idB} now show this investigation in their calibration history`,
   });
@@ -516,16 +519,17 @@ async function submitReportAsIdentityOnChain(chain: ZgChainAdapter, challengeId:
   await waitRobust(tx);
 }
 
-export async function runTamperDemo(): Promise<DemoTrace> {
+export async function runTamperDemo(onStep?: (step: DemoStep) => void): Promise<DemoTrace> {
   const steps: DemoStep[] = [];
+  const push = (s: DemoStep) => { steps.push(s); onStep?.(s); };
   const storage = new ZgStorageAdapter();
 
   const original = textToBytes("Protocol X announcement: raised $40,000,000");
   const { rootHash, mode } = await storage.upload(original);
-  steps.push({ label: "Evidence uploaded", detail: `rootHash=${rootHash} mode=${mode}` });
+  push({ label: "Evidence uploaded", detail: `rootHash=${rootHash} mode=${mode}` });
 
   const verify1 = await storage.verify(rootHash);
-  steps.push({ label: "Integrity check on untampered artifact", detail: verify1.ok ? "VERIFIED ✓" : "VERIFICATION FAILED ✗", data: verify1 });
+  push({ label: "Integrity check on untampered artifact", detail: verify1.ok ? "VERIFIED ✓" : "VERIFICATION FAILED ✗", data: verify1 });
 
   // Simulate tampering by writing different bytes under the same claimed hash.
   const localDir = "./.data/local-storage";
@@ -534,13 +538,13 @@ export async function runTamperDemo(): Promise<DemoTrace> {
     const { writeFileSync } = await import("node:fs");
     writeFileSync(path, Buffer.from("Protocol X announcement: raised $400,000,000"));
     const verify2 = await storage.verify(rootHash);
-    steps.push({ label: "Integrity check after tampering with the stored artifact", detail: verify2.ok ? "VERIFIED ✓ (BUG)" : "VERIFICATION FAILED ✗ (expected)", data: verify2 });
+    push({ label: "Integrity check after tampering with the stored artifact", detail: verify2.ok ? "VERIFIED ✓ (BUG)" : "VERIFICATION FAILED ✗ (expected)", data: verify2 });
 
     writeFileSync(path, Buffer.from(original));
     const verify3 = await storage.verify(rootHash);
-    steps.push({ label: "Integrity check after restoring the original bytes", detail: verify3.ok ? "VERIFIED ✓" : "VERIFICATION FAILED ✗", data: verify3 });
+    push({ label: "Integrity check after restoring the original bytes", detail: verify3.ok ? "VERIFIED ✓" : "VERIFICATION FAILED ✗", data: verify3 });
   } else {
-    steps.push({ label: "Tamper step skipped", detail: `local mirror not found at ${path} (unexpected in local mode)` });
+    push({ label: "Tamper step skipped", detail: `local mirror not found at ${path} (unexpected in local mode)` });
   }
 
   return { scenario: "Tamper detection", steps, ok: true };

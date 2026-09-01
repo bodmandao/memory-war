@@ -1,10 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { StepTimeline } from "./StepTimeline";
 import { InfraBadge } from "./Badge";
-import type { DemoTrace } from "@/lib/types";
+import { api } from "@/lib/api";
+import { networkFromRpc } from "@/lib/network";
+import type { DemoStep, DemoTrace } from "@/lib/types";
 
 const KNOWN_MODES = ["0G_STORAGE_LIVE", "LOCAL_DEMO", "0G_COMPUTE_TEE", "LOCAL_LLM", "SIMULATED"];
 
@@ -14,6 +16,8 @@ function modesUsedIn(trace: DemoTrace): string[] {
   return KNOWN_MODES.filter((m) => text.includes(m));
 }
 
+type RunState = "idle" | "running" | "done" | "error" | "cancelled";
+
 export function ScenarioCard({
   title,
   objective,
@@ -22,26 +26,55 @@ export function ScenarioCard({
 }: {
   title: string;
   objective: string;
-  run: () => Promise<DemoTrace>;
+  run: (onStep: (step: DemoStep) => void, signal?: AbortSignal) => Promise<DemoTrace>;
   flagship?: boolean;
 }) {
-  const [state, setState] = useState<"idle" | "running" | "done" | "error">("idle");
+  const [state, setState] = useState<RunState>("idle");
+  const [liveSteps, setLiveSteps] = useState<DemoStep[]>([]);
   const [trace, setTrace] = useState<DemoTrace | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [networkName, setNetworkName] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const modesUsed = useMemo(() => (trace ? modesUsedIn(trace) : []), [trace]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .health()
+      .then((h) => {
+        if (!cancelled) setNetworkName(networkFromRpc(h.rpcUrl).name);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function handleRun() {
     setState("running");
+    setLiveSteps([]);
     setTrace(null);
     setError(null);
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
-      const result = await run();
+      const result = await run((step) => setLiveSteps((prev) => [...prev, step]), controller.signal);
       setTrace(result);
       setState("done");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      setState("error");
+      if (err instanceof Error && err.message === "cancelled") {
+        setState("cancelled");
+      } else {
+        setError(err instanceof Error ? err.message : String(err));
+        setState("error");
+      }
+    } finally {
+      abortRef.current = null;
     }
+  }
+
+  function handleCancel() {
+    abortRef.current?.abort();
   }
 
   return (
@@ -52,23 +85,57 @@ export function ScenarioCard({
           <h3 className="text-[16px] font-semibold text-ink">{title}</h3>
           <p className="mt-1 max-w-xl text-[13px] leading-relaxed text-ink-dim">{objective}</p>
         </div>
-        <button
-          onClick={handleRun}
-          disabled={state === "running"}
-          className="shrink-0 rounded-lg bg-accent px-4 py-2 text-[13px] font-semibold text-ground transition-opacity disabled:opacity-50"
-        >
-          {state === "running" ? "Running…" : state === "done" ? "Run again" : "Run"}
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          {state === "running" && (
+            <button
+              onClick={handleCancel}
+              className="rounded-lg border border-line px-3.5 py-2 text-[13px] font-medium text-ink-dim transition-colors hover:border-false_/40 hover:text-false_"
+            >
+              Cancel
+            </button>
+          )}
+          <button
+            onClick={handleRun}
+            disabled={state === "running"}
+            className="rounded-lg bg-accent px-4 py-2 text-[13px] font-semibold text-ground transition-opacity disabled:opacity-50"
+          >
+            {state === "running" ? "Running…" : state === "done" || state === "cancelled" || state === "error" ? "Run again" : "Run"}
+          </button>
+        </div>
       </div>
 
       <AnimatePresence>
         {state === "running" && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="mt-5 flex items-center gap-3 text-[13px] text-ink-dim">
-            <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-line border-t-accent" aria-hidden />
-            <span>
-              <span className="mr-2 font-mono text-[11px] uppercase tracking-wide text-accent">Initializing</span>
-              Driving real transactions against the configured chain (local devnet by default). This can take a few seconds.
-            </span>
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="mt-5">
+            {liveSteps.length === 0 ? (
+              <div className="flex items-center gap-3 text-[13px] text-ink-dim">
+                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-line border-t-accent" aria-hidden />
+                <span>
+                  <span className="mr-2 font-mono text-[11px] uppercase tracking-wide text-accent">Connecting</span>
+                  Driving real transactions against {networkName ?? "the chain"}. First step can take a few seconds.
+                </span>
+              </div>
+            ) : (
+              <>
+                <div className="mb-4 flex items-center gap-3 text-[13px] text-ink-dim">
+                  <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-line border-t-accent" aria-hidden />
+                  <span>
+                    <span className="mr-2 font-mono text-[11px] uppercase tracking-wide text-accent">Running</span>
+                    {liveSteps[liveSteps.length - 1].label}
+                  </span>
+                </div>
+                <StepTimeline steps={liveSteps} ok={true} />
+              </>
+            )}
+          </motion.div>
+        )}
+        {state === "cancelled" && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mt-5">
+            <div className="mb-4 rounded-lg border border-line-soft bg-ground/40 p-4 text-[13px] text-ink-dim">
+              Stopped watching this run. Steps already submitted to the chain can&apos;t be undone — the server may have
+              finished the run in the background even though this view stopped early.
+            </div>
+            {liveSteps.length > 0 && <StepTimeline steps={liveSteps} ok={true} />}
           </motion.div>
         )}
         {state === "error" && (

@@ -75,37 +75,29 @@ function serialized<T>(fn: () => Promise<T>): Promise<T> {
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-app.post("/run/tamper", requireAuthAndRateLimit, async (_req, res) => {
-  try {
-    res.json(await serialized(runTamperDemo));
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
-  }
-});
+/**
+ * Streams each real step as the scenario function actually produces it
+ * (newline-delimited JSON), instead of buffering the whole trace until
+ * the run finishes — a full run can take a genuine while (real chain
+ * confirmations, real 0G Compute calls), and a single static "running…"
+ * message for the entire duration hid that real progress was happening.
+ * Once a run is queued via `serialized`, already-submitted transactions
+ * can't be safely unwound if the client disconnects, so the server keeps
+ * running it to completion regardless — a client-side "cancel" only
+ * stops watching, it never claims to undo real on-chain effects.
+ */
+function streamScenario(res: express.Response, runner: (onStep: (step: import("./lib.js").DemoStep) => void) => Promise<import("./lib.js").DemoTrace>) {
+  res.writeHead(200, { "content-type": "application/x-ndjson", "cache-control": "no-cache", "x-accel-buffering": "no" });
+  const onStep = (step: import("./lib.js").DemoStep) => res.write(`${JSON.stringify({ type: "step", step })}\n`);
+  serialized(() => runner(onStep))
+    .then((trace) => res.end(`${JSON.stringify({ type: "done", trace })}\n`))
+    .catch((err) => res.end(`${JSON.stringify({ type: "error", error: err instanceof Error ? err.message : String(err) })}\n`));
+}
 
-app.post("/run/a", requireAuthAndRateLimit, async (_req, res) => {
-  try {
-    res.json(await serialized(runScenarioA));
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
-  }
-});
-
-app.post("/run/b", requireAuthAndRateLimit, async (_req, res) => {
-  try {
-    res.json(await serialized(runScenarioB));
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
-  }
-});
-
-app.post("/run/c", requireAuthAndRateLimit, async (_req, res) => {
-  try {
-    res.json(await serialized(runScenarioC));
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
-  }
-});
+app.post("/run/tamper", requireAuthAndRateLimit, (_req, res) => streamScenario(res, runTamperDemo));
+app.post("/run/a", requireAuthAndRateLimit, (_req, res) => streamScenario(res, runScenarioA));
+app.post("/run/b", requireAuthAndRateLimit, (_req, res) => streamScenario(res, runScenarioB));
+app.post("/run/c", requireAuthAndRateLimit, (_req, res) => streamScenario(res, runScenarioC));
 
 /**
  * The agent-facing entry point (spec Priority 4 / §3):

@@ -30,14 +30,21 @@ export async function POST(req: NextRequest, { params }: { params: { path: strin
       },
       body: body && body.length > 0 ? body : undefined,
       cache: "no-store",
+      // @ts-expect-error — Node's fetch requires this for a streamed request body/response pairing in some runtimes; harmless no-op otherwise.
+      duplex: "half",
     });
   } catch {
     return NextResponse.json({ error: `could not reach the demo service` }, { status: 502 });
   }
 
+  const contentType = upstreamRes.headers.get("content-type") ?? "application/json";
+  // NDJSON responses (the /run/* scenario streams) are passed through live,
+  // chunk by chunk, so the browser sees each step as it actually happens
+  // instead of waiting for the whole (possibly long) run to finish.
+  if (contentType.includes("x-ndjson") && upstreamRes.body) {
+    return new NextResponse(upstreamRes.body, { status: upstreamRes.status, headers: { "content-type": contentType } });
+  }
+
   const payload = await upstreamRes.text();
-  return new NextResponse(payload, {
-    status: upstreamRes.status,
-    headers: { "content-type": upstreamRes.headers.get("content-type") ?? "application/json" },
-  });
+  return new NextResponse(payload, { status: upstreamRes.status, headers: { "content-type": contentType } });
 }
