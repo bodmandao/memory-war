@@ -13,8 +13,41 @@ import { runScenarioA, runScenarioB, runScenarioC, runTamperDemo, agentVerifyCla
 
 const PORT = Number(process.env.DEMO_SERVER_PORT ?? 4401);
 const app = express();
+app.set("trust proxy", true); // behind Railway/Render/etc., so req.ip is the real caller, not the platform's proxy
 app.use(cors());
 app.use(express.json());
+
+/**
+ * Every route below either drives real transactions from a real funded
+ * wallet (/run/*, /agent/verify-claim), so an unauthenticated public
+ * deployment of this server is a real spend vector, not just a demo
+ * inconvenience. If DEMO_API_KEY is set, every write route requires a
+ * matching `X-Demo-Key` header; if it's unset (the local-devnet default)
+ * auth is skipped entirely so `npm run demo:server` keeps working with
+ * zero setup. A tiny in-memory per-IP sliding window backs it up even
+ * with a valid key, since a leaked key shouldn't mean unlimited spend
+ * either — this is a demo relayer, not production rate-limiting
+ * infrastructure, and resets on every restart.
+ */
+const DEMO_API_KEY = process.env.DEMO_API_KEY;
+const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
+const RATE_LIMIT_MAX = 10;
+const requestLog = new Map<string, number[]>();
+
+function requireAuthAndRateLimit(req: express.Request, res: express.Response, next: express.NextFunction) {
+  if (DEMO_API_KEY && req.header("x-demo-key") !== DEMO_API_KEY) {
+    return res.status(401).json({ error: "missing or invalid X-Demo-Key header" });
+  }
+  const ip = req.ip ?? "unknown";
+  const now = Date.now();
+  const recent = (requestLog.get(ip) ?? []).filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
+  if (recent.length >= RATE_LIMIT_MAX) {
+    return res.status(429).json({ error: `rate limit: max ${RATE_LIMIT_MAX} requests per ${RATE_LIMIT_WINDOW_MS / 60000} minutes per caller` });
+  }
+  recent.push(now);
+  requestLog.set(ip, recent);
+  next();
+}
 
 /**
  * Every route below drives real transactions from the SAME handful of
@@ -42,7 +75,7 @@ function serialized<T>(fn: () => Promise<T>): Promise<T> {
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-app.post("/run/tamper", async (_req, res) => {
+app.post("/run/tamper", requireAuthAndRateLimit, async (_req, res) => {
   try {
     res.json(await serialized(runTamperDemo));
   } catch (err) {
@@ -50,7 +83,7 @@ app.post("/run/tamper", async (_req, res) => {
   }
 });
 
-app.post("/run/a", async (_req, res) => {
+app.post("/run/a", requireAuthAndRateLimit, async (_req, res) => {
   try {
     res.json(await serialized(runScenarioA));
   } catch (err) {
@@ -58,7 +91,7 @@ app.post("/run/a", async (_req, res) => {
   }
 });
 
-app.post("/run/b", async (_req, res) => {
+app.post("/run/b", requireAuthAndRateLimit, async (_req, res) => {
   try {
     res.json(await serialized(runScenarioB));
   } catch (err) {
@@ -66,7 +99,7 @@ app.post("/run/b", async (_req, res) => {
   }
 });
 
-app.post("/run/c", async (_req, res) => {
+app.post("/run/c", requireAuthAndRateLimit, async (_req, res) => {
   try {
     res.json(await serialized(runScenarioC));
   } catch (err) {
@@ -89,7 +122,7 @@ app.post("/run/c", async (_req, res) => {
  * racing each other's nonces; a failure is always a real HTTP error,
  * never a fabricated success.
  */
-app.post("/agent/verify-claim", async (req, res) => {
+app.post("/agent/verify-claim", requireAuthAndRateLimit, async (req, res) => {
   const body = req.body as Partial<AgentVerifyInput>;
   if (!body.claim || typeof body.claim !== "string" || body.claim.trim().length === 0) {
     return res.status(400).json({ error: "body.claim (non-empty string) is required" });

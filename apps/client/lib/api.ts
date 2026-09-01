@@ -1,7 +1,10 @@
 import type { AgentVerifyResult, Challenge, Claim, DemoTrace, Health, Investigator } from "./types";
 
 const INDEXER_BASE = process.env.NEXT_PUBLIC_INDEXER_URL ?? "http://localhost:4400";
-const DEMO_BASE = process.env.NEXT_PUBLIC_DEMO_URL ?? "http://localhost:4401";
+// Always same-origin, proxied server-side by app/api/demo/[...path]/route.ts —
+// the real demo server URL and its shared secret are server-only env vars
+// (DEMO_UPSTREAM_URL / DEMO_API_KEY), never exposed to the browser.
+const DEMO_BASE = "/api/demo";
 
 export class ApiError extends Error {
   constructor(
