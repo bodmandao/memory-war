@@ -1,0 +1,5 @@
+# Force consistent LF line endings for all text files, regardless of
+# which OS/git checks them out or which git's core.autocrlf setting is
+# in effect — avoids spurious "modified" status when the same repo is
+# touched from both native WSL git and Windows git-bash.
+* text=auto eol=lf
