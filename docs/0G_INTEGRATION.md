@@ -1,7 +1,25 @@
-# 0G-native integration pass
+# 0G integration — status and rationale
 
-This document covers the second implementation pass: making MEMORY WAR
-more deeply integrated with the 0G ecosystem without touching the core
+## Current status (verified live, not aspirational)
+
+| Rail | Status | Network | Evidence |
+|---|---|---|---|
+| Chain | **LIVE** | Mainnet (`16661`) | `MemoryWarRegistry` at `0x20eC53851DcDcA67Ae8340c9962baCedaF63aD83`, bytecode/state independently read back post-deploy |
+| Storage | **LIVE** | Mainnet | Real bytes uploaded to `indexer-storage-turbo.0g.ai`, downloaded back byte-for-byte, twice |
+| Compute | **LIVE**, TEE-attested | Testnet (deliberately, see below) | `broker.inference.processResponse()` independently returned `true` for a real response |
+| Payments / settlement | **LIVE**, on-chain | Mainnet | A full pay-per-verification lifecycle resolved `TRUE` with two investigators paid atomically in the verdict transaction |
+| DA | `COMMITMENT_READY`, not live | — | Real batching math (`daBatch.ts`), no network call — no official 0G DA SDK exists yet |
+| ERC-7857 | Not used, on purpose | — | See `ERC7857_DECISION.md` |
+
+Full narrative, exact transaction hashes, and every bug found and fixed
+while getting each of these live: `docs/AUDIT.md`, Addenda 6–8. The
+sections below are the original design rationale from the pass that
+built this integration; they remain accurate and are not restated here.
+
+## What this document originally covered
+
+This document covers the implementation pass that made MEMORY WAR more
+deeply integrated with the 0G ecosystem without touching the core
 protocol invariants (predicate normalization, typed challenges, the
 evidence DAG, independent investigation, dissent-preserving verdicts,
 supersession, bi-temporal history, no protocol token). Those are all

@@ -1,5 +1,42 @@
 # Final Audit
 
+## Current status, read this first
+
+This document is a chronological audit trail, newest addendum first,
+followed by the original baseline report (sections A–J) from the very
+first pass. That baseline predates the live 0G mainnet deployment and
+says so explicitly (e.g. "not yet deployed", storage/compute "never
+exercised") — those specific statements are **superseded** by Addenda 6
+and 8 below, which is why they're corrected here rather than edited in
+place: this document's whole value is that nothing gets quietly rewritten
+after the fact.
+
+As of Addendum 8, current state is:
+
+- **Chain**: live on 0G mainnet (`16661`). `MemoryWarRegistry`
+  `0x20eC53851DcDcA67Ae8340c9962baCedaF63aD83`,
+  `InvestigatorRegistry` `0xde4070363ee7B6Ba0ee567929b532489a3b4A8f4`.
+- **Storage**: live on 0G mainnet, real upload/download round-trip
+  verified byte-for-byte.
+- **Compute**: live, genuine TEE attestation, on 0G **testnet** —
+  deliberately, since 0G Compute is not documented as available on
+  mainnet.
+- **A full pay-per-verification lifecycle has resolved on mainnet**:
+  claim → payment → evidence → two independently funded, TEE-verified
+  investigators → mechanical `TRUE` verdict → both investigators paid
+  atomically in the same transaction as the verdict. See Addendum 8 for
+  the exact claim/challenge IDs, both investigator addresses, and every
+  transaction hash, and `README.md` → Mainnet Deployment for the
+  short version.
+- **DA**: `COMMITMENT_READY`, not live — see Addendum 1 / `DA_DECISION.md`.
+- **ERC-7857**: deliberately not used — see `ERC7857_DECISION.md`.
+
+Test suite as of the most recent pass: 101/101 passing
+(protocol-core 67, zg-adapters 13, contracts 21). Client is
+`apps/client`; `apps/web` no longer exists in the tree (Addendum 5).
+
+---
+
 > **Addendum 8 — the first fully resolved case on 0G mainnet.** A
 > second, independently funded mainnet wallet was provided specifically
 > for the `investigatorB` role (`makeChain()` in `demo/lib.ts` now
@@ -436,6 +473,13 @@
 This is the honest report demanded by the build spec §26. It was written
 after running the actual test suites and a live end-to-end demo against
 a real deployed contract on a real (local) EVM — not written from intent.
+
+**This is the original, first-pass baseline** — kept verbatim as the
+historical record. Where it says 0G Storage/Compute were "never
+exercised" or the contract "not yet deployed" to a live 0G network
+(sections C–F, J below), that was true *then* and is corrected by
+Addenda 6 and 8 above, which is why it's addressed at the top of this
+document rather than rewritten here.
 
 ## A. What was already present
 
