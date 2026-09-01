@@ -19,8 +19,8 @@ CLAIM
 A claim never skips a stage silently: every stage above either happens
 or is shown as pending/not-triggered — the client's claim detail view
 enforces this by always rendering all eight case-file stages
-(Evidence → Settlement) in fixed order, regardless of how far a given
-claim has actually progressed.
+(Claim → History) in fixed order, regardless of how far a given claim
+has actually progressed.
 
 ## Component boundary — on-chain / off-chain / 0G / application
 

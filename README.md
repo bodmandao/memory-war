@@ -77,97 +77,96 @@ committed on-chain where it can't be quietly edited later.
 
 This is the section a 0G judge should read closely — every claim below
 is qualified by what was actually exercised, not what the SDK makes
-theoretically possible. Full technical detail and the bug-by-bug history
-behind these claims: [`docs/0G_INTEGRATION.md`](docs/0G_INTEGRATION.md)
-and [`docs/AUDIT.md`](docs/AUDIT.md).
+theoretically possible. This lists what MEMORY WAR genuinely integrates,
+not a catalogue of every 0G product that exists. Full technical detail
+and the bug-by-bug history behind these claims:
+[`docs/0G_INTEGRATION.md`](docs/0G_INTEGRATION.md) and
+[`docs/AUDIT.md`](docs/AUDIT.md).
 
-| Rail | Status | Network |
-|---|---|---|
-| 0G Chain | **LIVE** | Mainnet (16661) |
-| 0G Storage | **LIVE** | Mainnet |
-| 0G Compute | **LIVE** (TEE-attested) | Testnet, deliberately |
-| Payments / settlement | **LIVE**, on-chain | Mainnet |
-| 0G DA | Commitment logic implemented, not wired to a live network call | — |
-| ERC-7857 / Agentic ID | Deliberately not used — see below | — |
+### Live 0G integrations
 
-### Chain
+MEMORY WAR doesn't just call out to 0G infrastructure — each surface has
+its own dedicated adapter in `packages/zg-adapters/src/` that wraps the
+official SDK, adds protocol-specific logic on top, and never lets a
+result claim more than what actually happened:
+
+| Component | Official SDK / package | MEMORY WAR integration | Status |
+|---|---|---|---|
+| 0G Chain | `ethers` v6 (0G Chain is EVM-compatible — there's no separate 0G-branded chain SDK) | `chain.ts` adapter + `MemoryWarRegistry.sol` / `InvestigatorRegistry.sol` (deployed via Hardhat) + native-token settlement | Live mainnet |
+| 0G Storage | [`@0gfoundation/0g-storage-ts-sdk`](https://www.npmjs.com/package/@0gfoundation/0g-storage-ts-sdk) | `storage.ts` adapter — evidence upload/download/verification, content-hash reconciliation | Live mainnet |
+| 0G Compute | [`@0gfoundation/0g-compute-ts-sdk`](https://www.npmjs.com/package/@0gfoundation/0g-compute-ts-sdk) | `compute.ts` adapter — TEE-attested investigator execution via the Compute Network Broker | Live testnet |
+
+#### Chain
 
 `MemoryWarRegistry.sol` and `InvestigatorRegistry.sol` are deployed to
 **0G mainnet** (chain ID `16661`, `https://evmrpc.0g.ai`). The full claim
 state machine is enforced entirely on-chain: claim/challenge IDs,
 predicate and text hashes, evidence bundle roots, bond escrow, every
 state transition, verdict commitments, supersession pointers, and
-append-only appeal records. See [Mainnet Deployment](#mainnet-deployment)
-for the deployed addresses and a real resolved case.
+append-only appeal records — including settlement itself: investigator
+payment is real, native on-chain token transfer, atomic with the verdict
+in the same transaction (a `requestVerification(claimId)` fee for a
+no-adversary verification, or the existing bond/win-lose split for an
+adversarial challenge). Since 0G Chain is EVM-compatible, the Chain
+adapter (`packages/zg-adapters/src/chain.ts`) talks to it with the
+standard `ethers` v6 library against 0G's own JSON-RPC endpoint — there
+is no separate 0G-branded "Chain SDK" to depend on; the actual 0G-native
+integration here is the deployed contracts themselves. See
+[Mainnet Deployment](#mainnet-deployment) for the deployed addresses and
+a real resolved case with real payout amounts.
 
-### Storage
+#### Storage
 
 Evidence bundles, claim text, and investigator reasoning are uploaded to
-the live 0G Storage network via `@0gfoundation/0g-storage-ts-sdk`
-(mainnet indexer `indexer-storage-turbo.0g.ai`) and are content-addressed
-by the protocol's own canonical hash (`contentHashOf`) — the same
-identifier committed on-chain as `Evidence.id` / `evidenceBundleHash`.
+and retrieved from the live 0G Storage network through the official
+[`@0gfoundation/0g-storage-ts-sdk`](https://www.npmjs.com/package/@0gfoundation/0g-storage-ts-sdk)
+package (mainnet indexer `indexer-storage-turbo.0g.ai`) — MEMORY WAR's
+`packages/zg-adapters/src/storage.ts` adapter wraps the SDK's `Indexer` /
+`MemData` classes (`merkleTree()`, `indexer.upload()`,
+`indexer.downloadToBlob()`) and adds the protocol-specific layer on top:
+every artifact is content-addressed by the protocol's own canonical hash
+(`contentHashOf`) — the same identifier committed on-chain as
+`Evidence.id` / `evidenceBundleHash` — and the adapter reconciles that
+hash against 0G Storage's own internal network root (a different value
+by design; see `docs/AUDIT.md`, Addendum 6) so a caller can always
+retrieve and verify content by the hash the protocol actually recorded.
 The protocol commits and *verifies* evidence against that hash — it does
 not just store arbitrary files and hope they match later. A real upload
 was round-tripped byte-for-byte against mainnet and independently
-re-verified (see `docs/AUDIT.md`, Addendum 6). If live configuration is
-missing or the network is unreachable, the adapter falls back honestly
-to a labeled `LOCAL_DEMO` mode — it never upgrades a label past what
-actually happened.
+re-verified. If live configuration is missing or the network is
+unreachable, the adapter falls back honestly to a labeled `LOCAL_DEMO`
+mode — it never upgrades a label past what actually happened.
 
-### Compute
+#### Compute
 
-Investigator execution runs through the 0G Compute broker
-(`@0gfoundation/0g-compute-ts-sdk`) with genuine TEE attestation: a
-result is only ever labeled `0G_COMPUTE_TEE` with `verified: true` if
-`broker.inference.processResponse()` independently confirmed it for that
-exact response. This has been demonstrated live, including in the
-resolved mainnet case below. **It runs on 0G testnet, not mainnet** —
-0G Compute is not documented as being available on mainnet at all, so
-the adapter deliberately uses its own dedicated testnet wallet
-(`OG_COMPUTE_CHAIN_RPC_URL` / `COMPUTE_PRIVATE_KEY`), entirely separate
-from the mainnet deployment wallet, so a mainnet-funded key can never be
-reused for compute by accident. Every report that didn't earn TEE
-verification is labeled `LOCAL_LLM` or `SIMULATED` instead — nothing is
-ever upgraded past what actually ran.
+Investigator execution runs through the official
+[`@0gfoundation/0g-compute-ts-sdk`](https://www.npmjs.com/package/@0gfoundation/0g-compute-ts-sdk)'s
+Compute Network Broker (`createZGComputeNetworkBroker`) — MEMORY WAR's
+`packages/zg-adapters/src/compute.ts` adapter drives the broker's
+`inference`/`ledger` API (`listService`, `transferFund`,
+`getServiceMetadata`, `getRequestHeaders`) to run an investigator's
+evaluation against a real TEE-backed model provider, then calls
+`broker.inference.processResponse()` to independently verify the
+response actually came from that attested execution. A result is only
+ever labeled `0G_COMPUTE_TEE` with `verified: true` if that call
+returned `true` for that exact response — this has been demonstrated
+live, including in the resolved mainnet case below. **It runs on 0G
+testnet, not mainnet** — 0G Compute is not documented as being available
+on mainnet at all, so the adapter deliberately uses its own dedicated
+testnet wallet (`OG_COMPUTE_CHAIN_RPC_URL` / `COMPUTE_PRIVATE_KEY`),
+entirely separate from the mainnet deployment wallet, so a
+mainnet-funded key can never be reused for compute by accident. Every
+report that didn't earn TEE verification is labeled `LOCAL_LLM` or
+`SIMULATED` instead — nothing is ever upgraded past what actually ran.
 
-### Payments
+### 0G DA — Not yet completed
 
-There is no separately published "0G Pay" SDK to integrate against —
-none exists publicly as of this build. What's built instead is the real
-rail 0G Chain already provides: native on-chain token settlement.
-`requestVerification(claimId)` lets an agent pay a fee for a
-no-adversary, no-dispute verification; `_settleBond` pays investigators
-their execution fee out of the pool first, regardless of verdict (100%
-for a verification request, 20% on an adversarial challenge, with the
-existing win/lose rule applied to the remainder). Settlement happens in
-the same on-chain transaction as the verdict — see the resolved mainnet
-case below for a real example with real payout amounts.
-
-### DA
-
-`packages/protocol-core/src/daBatch.ts` implements a real, tested,
-order-independent Merkle commitment over a batch of events
-(`computeBatchCommitment`) and the actual throughput heuristic for when
-batching would be worth it (`shouldBatchForDA`) — this is real code, not
-a placeholder. It is labeled **`COMMITMENT READY`**, not live, because no
-official 0G DA TypeScript client exists to call for real as of this
-build, and every evidence artifact in this protocol is already
-individually content-addressed and verifiable — there isn't a
-data-availability problem to solve today. Full reasoning:
+The batch-commitment data structures for a future high-throughput path
+(`packages/protocol-core/src/daBatch.ts`) are implemented and tested,
+but the live 0G DA network integration has not yet been completed —
+prepared architecture, not a completed integration, so DA is not
+claimed as a live 0G integration in the current build. Full reasoning:
 [`docs/DA_DECISION.md`](docs/DA_DECISION.md).
-
-### ERC-7857 / Agentic ID
-
-Deliberately not used. ERC-7857 makes an agent's intelligence a private,
-transferable secret — the right primitive for a proprietary trading bot,
-wrong for an investigator, whose entire value is that its model
-identity, reasoning, and track record stay public and non-transferable.
-`InvestigatorRegistry.sol` is built instead, closer to an ERC-8004
-Identity Registry: a persistent `investigatorId` that survives key
-rotation (`rotateController`) and records explicit version lineage
-(`parentId`), with no `transfer()` at all. Full reasoning:
-[`docs/ERC7857_DECISION.md`](docs/ERC7857_DECISION.md).
 
 ## Architecture
 
@@ -326,9 +325,10 @@ never edited out after the fact; corrections are appended as addenda.
 - **0G Compute runs on testnet, not mainnet** — by design, since 0G
   Compute is not documented as available on mainnet at all. See
   [0G Integration → Compute](#compute).
-- **0G DA is commitment-ready, not live** — the batching math is real
-  and tested; there is no live network call because no official 0G DA
-  TypeScript client exists yet. See [0G Integration → DA](#da).
+- **0G DA has not yet been completed** — the batch-commitment data
+  structures are implemented and tested; there is no live network call
+  because no official 0G DA TypeScript client exists yet. See
+  [0G Integration → 0G DA](#0g-da--not-yet-completed).
 - **A public 0G mainnet RPC node has, at least once, permanently
   dropped a successful transaction's logs** (confirmed via independent
   `eth_getLogs`, not a transient lag) — a real infrastructure defect on

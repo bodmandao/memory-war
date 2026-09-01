@@ -8,7 +8,7 @@
 | Storage | **LIVE** | Mainnet | Real bytes uploaded to `indexer-storage-turbo.0g.ai`, downloaded back byte-for-byte, twice |
 | Compute | **LIVE**, TEE-attested | Testnet (deliberately, see below) | `broker.inference.processResponse()` independently returned `true` for a real response |
 | Payments / settlement | **LIVE**, on-chain | Mainnet | A full pay-per-verification lifecycle resolved `TRUE` with two investigators paid atomically in the verdict transaction |
-| DA | `COMMITMENT_READY`, not live | — | Real batching math (`daBatch.ts`), no network call — no official 0G DA SDK exists yet |
+| DA | **Not yet completed** | — | Real batching math (`daBatch.ts`) is prepared; the live network call is not — no official 0G DA SDK exists yet, so it is not claimed as an integration |
 | ERC-7857 | Not used, on purpose | — | See `ERC7857_DECISION.md` |
 
 Full narrative, exact transaction hashes, and every bug found and fixed
@@ -99,12 +99,19 @@ and returns:
   "confidence": 0.7,
   "evidenceRoot": "0x...",
   "investigationId": "0x...",
-  "investigators": [{ "address": "0x...", "investigatorId": "0x...", "modelProvider": "...", "verdict": "SUPPORTS", "attestation": {} }],
-  "attestation": { "anyLiveTee": false, "modes": ["SIMULATED", "SIMULATED"] },
+  "investigators": [{ "address": "0x...", "investigatorId": "0x...", "modelProvider": "...", "verdict": "SUPPORTS", "attestation": { "mode": "0G_COMPUTE_TEE", "verified": true, "detail": "..." } }],
+  "attestation": { "anyLiveTee": true, "modes": ["0G_COMPUTE_TEE", "0G_COMPUTE_TEE"] },
   "payment": { "feeWei": "2000000000000000", "payouts": [{ "investigator": "0x...", "amountWei": "1000000000000000" }] },
   "history": { "claimId": "0x...", "onChainTxHash": "0x...", "queryUrl": "/claims/0x..." }
 }
 ```
+
+This is the shape a genuinely TEE-verified run returns — see the
+resolved mainnet case in `README.md` → Mainnet Deployment for a real
+example with real values instead of placeholders. `anyLiveTee`/`modes`
+degrade honestly to `false`/`SIMULATED` or `LOCAL_LLM` whenever a report
+didn't actually earn live TEE verification — never upgraded past what
+ran, per the honesty contract in `docs/ARCHITECTURE.md`.
 
 Every field is independently re-derivable from chain state via the
 indexer — this endpoint is a convenience orchestrator (a demo-scale

@@ -3,13 +3,16 @@
 ## Current status, read this first
 
 This document is a chronological audit trail, newest addendum first,
-followed by the original baseline report (sections A–J) from the very
+followed by the original baseline report (sections A–I) from the very
 first pass. That baseline predates the live 0G mainnet deployment and
 says so explicitly (e.g. "not yet deployed", storage/compute "never
 exercised") — those specific statements are **superseded** by Addenda 6
 and 8 below, which is why they're corrected here rather than edited in
 place: this document's whole value is that nothing gets quietly rewritten
-after the fact.
+after the fact. The baseline originally closed with a section J, a
+single pull-quote summarizing the same now-superseded "never exercised"
+claim in standalone form — removed here rather than left to be quoted
+out of context; sections A–I are otherwise untouched.
 
 As of Addendum 8, current state is:
 
@@ -459,7 +462,8 @@ Test suite as of the most recent pass: 101/101 passing
 >   paths are still unexercised against the real network this pass —
 >   Priority 1's payment settlement is real on-chain value, but the
 >   *investigator execution* itself still ran in `SIMULATED` mode for
->   every demo run in this pass, same as before.
+>   every demo run in this pass, same as before. *(Resolved by Addendum
+>   6/8, several passes later — see the top of this document.)*
 > - **P1 — no dist/source drift guard.** As seen above, a stale compiled
 >   package can silently serve an old ABI. Worth a pre-flight check
 >   (e.g. `npm run build` as a `pretest`/`predemo` hook) in a future pass.
@@ -477,7 +481,7 @@ a real deployed contract on a real (local) EVM — not written from intent.
 **This is the original, first-pass baseline** — kept verbatim as the
 historical record. Where it says 0G Storage/Compute were "never
 exercised" or the contract "not yet deployed" to a live 0G network
-(sections C–F, J below), that was true *then* and is corrected by
+(sections C–F below), that was true *then* and is corrected by
 Addenda 6 and 8 above, which is why it's addressed at the top of this
 document rather than rewritten here.
 
@@ -532,7 +536,9 @@ event log.
 
 This is **ON-CHAIN VERIFIED (local devnet)** — real EVM bytecode, real
 state transitions, real bond accounting. It is **not yet deployed to
-the live 0G Galileo testnet.** The deploy script (`scripts/deploy.ts`,
+the live 0G Galileo testnet.** *(Resolved — see Addendum 6/8: deployed
+and independently verified live on 0G mainnet, not just testnet.)* The
+deploy script (`scripts/deploy.ts`,
 network `ogTestnet` in `hardhat.config.ts`) is real and testnet-ready,
 but 0G's faucet requires an X-account login and a captcha — there was
 no way to obtain a funded testnet wallet autonomously in this session.
@@ -541,7 +547,9 @@ Deploying live requires the user to fund a wallet and set
 
 ## D. What is genuinely stored on 0G
 
-**Nothing, in this session.** `ZgStorageAdapter`'s live path calls the
+**Nothing, in this session.** *(Resolved — see Addendum 6: real bytes
+were later round-tripped byte-for-byte against live 0G Storage
+mainnet.)* `ZgStorageAdapter`'s live path calls the
 real SDK (`Indexer`, `MemData`, `.merkleTree()`, `.upload()`,
 `.downloadToBlob()`) with the exact method signatures confirmed against
 the published package's own type declarations — but it requires
@@ -554,7 +562,10 @@ upgraded to look more impressive than what happened.
 
 ## E. What is genuinely executed/attested through 0G Compute
 
-**Nothing, in this session.** `ZgComputeInvestigator`'s live path calls
+**Nothing, in this session.** *(Resolved — see Addendum 6/8: genuine
+TEE-attested investigations later ran live on 0G Compute testnet,
+including in the fully resolved mainnet case.)* `ZgComputeInvestigator`'s
+live path calls
 the real broker SDK (`createZGComputeNetworkBroker`, `listService`,
 `transferFund`, `getServiceMetadata`, `getRequestHeaders`,
 `processResponse`) matching the SDK's documented flow — but it requires
@@ -568,6 +579,10 @@ log line, and UI badge that touches it says so explicitly. **No
 didn't earn it.**
 
 ## F. What remains simulated
+
+*(Resolved — see Addendum 6/8: the live round-trip described below did
+run, on real 0G mainnet/testnet, and is no longer the standing gap this
+section describes. Kept verbatim as the honest state at the time.)*
 
 0G Storage and 0G Compute integration, for the reasons in D and E
 above. This is the single most important limitation of this delivery
@@ -627,15 +642,20 @@ deploying, running, and re-running it.
 
 ## H. Remaining P0 / P1 weaknesses
 
-- **P0 — 0G Storage/Compute live path is unverified end-to-end.** Code
+- **P0 — 0G Storage/Compute live path is unverified end-to-end.**
+  *(Resolved — see Addendum 6/8: both were exercised live against real
+  0G mainnet/testnet, including a fully resolved mainnet case.)* Code
   is real and SDK-correct; the live network round-trip has not been
   exercised (see D, E, F).
 - **P0 — SIMULATED investigator "independence" is not epistemically
-  meaningful.** Both investigators in every run in this session are the
-  same deterministic function and produced byte-identical reasoning
-  (confirmed in the trace output) — the model-diversity guarantee only
-  becomes real once `LOCAL_LLM` (distinct providers) or
-  `0G_COMPUTE_TEE` (distinct attested models) is actually exercised.
+  meaningful.** *(Resolved — see Addendum 8: the resolved mainnet case
+  used two genuinely distinct, independently funded investigators, both
+  attested `0G_COMPUTE_TEE` / `verified: true`.)* Both investigators in
+  every run in this session are the same deterministic function and
+  produced byte-identical reasoning (confirmed in the trace output) —
+  the model-diversity guarantee only becomes real once `LOCAL_LLM`
+  (distinct providers) or `0G_COMPUTE_TEE` (distinct attested models)
+  is actually exercised.
 - **P1 — predicate extraction is regex-based**, scoped to the MVP's
   funding/valuation/TVL/exploit claim shapes (spec §21). The
   `PredicateExtractor` interface anticipates an LLM-backed extractor,
@@ -662,18 +682,9 @@ deploying, running, and re-running it.
 npm install                                    # or: mirror to a local path first, see P1 above
 npm run chain:node                             # terminal A
 npm run chain:deploy:local                     # terminal B — copy the printed address into .env
-npm test && npm run test:contracts             # 76 unit/integration tests + 21 contract tests
+npm test && npm run test:contracts             # 101 tests total (67 protocol-core + 13 zg-adapters + 21 contracts)
 npm run demo:full                              # tamper detection → scenarios A, B, C, full trace
 npm run indexer:dev                            # terminal C — GET /claims, /challenges/:id, /content/:hash, /investigators
 npm run demo:server                            # terminal D — POST /run/tamper, /run/a, /run/b, /run/c, /agent/verify-claim
 npm run client:dev                             # terminal E — open http://localhost:4402
 ```
-
-## J. One brutally honest sentence
-
-**If a 0G judge audits this repository today, the strongest criticism
-they can still make is that the 0G Storage and 0G Compute integrations
-are real, SDK-correct, and fully tested in their honestly-labeled local
-fallback modes, but the live round-trip through the actual 0G network
-has never once been exercised — only the contract layer has been
-proven against a real, running chain.**
